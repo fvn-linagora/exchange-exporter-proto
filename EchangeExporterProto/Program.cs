@@ -1,12 +1,15 @@
 ﻿using System;
-using System.Net;
-using System.Linq;
-using EasyNetQ;
-using Microsoft.Exchange.WebServices.Data;
 using System.Text;
-using Messages;
+using System.Net;
 using System.Collections.Generic;
+using System.Linq;
+
+using Microsoft.Exchange.WebServices.Data;
+using EasyNetQ;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
+using Messages;
 
 namespace EchangeExporterProto
 {
@@ -28,18 +31,14 @@ namespace EchangeExporterProto
         {
             ExchangeService service = ConnectToExchange();
 
-            var fetchView = new ItemView(int.MaxValue);
-            fetchView.PropertySet = new PropertySet(BasePropertySet.FirstClassProperties);
-
             using (var bus = RabbitHutch.CreateBus(MQCONNETIONSTRING, serviceRegister => serviceRegister.Register<ISerializer>(
-                    serviceProvider => new NullHandingJsonSerializer(new TypeNameSerializer()))))             
+                    serviceProvider => new NullHandingJsonSerializer(new TypeNameSerializer()))))
             {
                 var foundEvents = FindAllMeetings(service);
 
                 foreach (var ev in foundEvents)
                 {
-                    // Console.WriteLine(ev);
-                    Console.WriteLine(DumpAvailablePropsToJson(ev));
+                    // Console.WriteLine(ev.Appointment.ToString());
                     bus.Publish(ev);
                 }
             }
@@ -50,58 +49,64 @@ namespace EchangeExporterProto
             return JsonConvert.SerializeObject(ev, Formatting.Indented, serializerSettings);
         }
 
-        private static IEnumerable<Appointment> FindAllMeetings(ExchangeService service)
+        private static IEnumerable<NewAppointmentDumped> FindAllMeetings(ExchangeService service)
         {
-            //service.FindItems(WellKnownFolderName.Contacts, fetchView)
-            //    .Select(c => Contact.Bind(service, c.Id))
-            //    .ToList()
-            //    .ForEach(bus.Publish);
+            PropertySet includeMostProps = BuildAppointmentPropertySet();
+            var foundEvents = service.FindItems(WellKnownFolderName.Calendar, new ItemView(int.MaxValue));
+            var foundEventsWithProps = foundEvents.Select(app => Appointment.Bind(service, app.Id, includeMostProps));
 
-            // PropertySet includeMimeICS = new PropertySet(BasePropertySet.FirstClassProperties, AppointmentSchema.MimeContent);
-            PropertySet includeMostProps = new PropertySet(
-                BasePropertySet.FirstClassProperties,
-                AppointmentSchema.AppointmentType,
-                AppointmentSchema.Body,
-                AppointmentSchema.Categories,
-                AppointmentSchema.Culture,
-                AppointmentSchema.DateTimeCreated,
-                AppointmentSchema.DateTimeReceived,
-                AppointmentSchema.DateTimeSent,
-                AppointmentSchema.DisplayTo,
-                AppointmentSchema.DisplayCc,
-                AppointmentSchema.Duration,
-                AppointmentSchema.End,
-                AppointmentSchema.Start,
-                AppointmentSchema.StartTimeZone,
-                AppointmentSchema.Subject,
-                // AppointmentSchema.TextBody, // EWS 2013 only
-                AppointmentSchema.TimeZone,
-                AppointmentSchema.When
-            );
-            var foundEvents = service.FindItems(WellKnownFolderName.Calendar, new ItemView(int.MaxValue))
-                .Select(app => Appointment.Bind(service, app.Id, includeMostProps))
-                // .Select(app => Appointment.Bind(service, app.Id))
-                // .Select(app => Encoding.GetEncoding(app.MimeContent.CharacterSet).GetString(app.MimeContent.Content))
-                // .Select(DumpAsEvent)
-                // .Select(DumpRequestMetadata)
-                ;
+            var appointmentsInfo = foundEventsWithProps.Select(RemoveTypings);
 
-            return foundEvents;
+            var appointmentAsMimeContent = foundEvents
+                .Select(app => Appointment.Bind(service, app.Id, new PropertySet(AppointmentSchema.MimeContent)))
+                .Select(app => app.MimeContent);
+
+            foundEvents.Zip(appointmentsInfo, (app, dyn) => new NewAppointmentDumped {
+                Id = app.Id.ToString(),
+                Appointment = dyn,
+            });
+
+            return foundEvents
+                .Zip(appointmentsInfo, (app, dyn) => new {
+                    Id = app.Id.ToString(),
+                    Appointment = dyn,
+                })
+                .Zip(appointmentAsMimeContent, (zip, mime) => new NewAppointmentDumped {
+                    Id = zip.Id,
+                    Appointment = zip.Appointment,
+                    MimeContent = Encoding.GetEncoding(mime.CharacterSet).GetString(mime.Content),
+                });
         }
 
-        private static IEvent DumpAsEvent(Appointment app)
+        private static PropertySet BuildAppointmentPropertySet()
         {
-            MimeContent appointmentMimeContent = new MimeContent(Encoding.UTF8.WebName, new byte[] {});
-            try {
-                appointmentMimeContent = app.MimeContent;
-            }
-            catch {}
+            return new PropertySet(
+                            BasePropertySet.FirstClassProperties,
+                            AppointmentSchema.AppointmentType,
+                            AppointmentSchema.Body,
+                            AppointmentSchema.Categories,
+                            AppointmentSchema.Culture,
+                            AppointmentSchema.DateTimeCreated,
+                            AppointmentSchema.DateTimeReceived,
+                            AppointmentSchema.DateTimeSent,
+                            AppointmentSchema.DisplayTo,
+                            AppointmentSchema.DisplayCc,
+                            AppointmentSchema.Duration,
+                            AppointmentSchema.End,
+                            AppointmentSchema.Start,
+                            AppointmentSchema.StartTimeZone,
+                            AppointmentSchema.Subject,
+                // AppointmentSchema.TextBody, // EWS 2013 only
+                            AppointmentSchema.TimeZone,
+                            AppointmentSchema.When
+                        );
+        }
 
-            return new NewAppointmentDumped {
-                Id = app.Id.ToString(),
-                // Appointment = app,
-                MimeContent = Encoding.GetEncoding(appointmentMimeContent.CharacterSet).GetString(appointmentMimeContent.Content),
-            };
+        private static JObject RemoveTypings(Appointment app)
+        {
+            return JsonConvert.DeserializeObject<JObject>(
+                JsonConvert.SerializeObject(app, Formatting.Indented, serializerSettings)
+            );
         }
 
         private static ExchangeService ConnectToExchange() {

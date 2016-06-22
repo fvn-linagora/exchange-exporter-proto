@@ -7,7 +7,8 @@ using Newtonsoft.Json.Serialization;
 
 namespace EchangeExporterProto {
 
-    public class SkipRequestInfoContractResolver : DefaultContractResolver {
+    public class SkipRequestInfoContractResolver : CamelCasePropertyNamesContractResolver {
+
         private readonly HashSet<string> excludedProperties;
         public SkipRequestInfoContractResolver(params string[] propertyNames) {
             excludedProperties = new HashSet<string>(propertyNames);
