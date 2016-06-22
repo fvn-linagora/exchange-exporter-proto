@@ -1,14 +1,19 @@
-﻿using EasyNetQ;
-using System;
+﻿using System;
+using System.Configuration;
 using System.Collections.Generic;
 using System.Linq;
+
+using EasyNetQ;
+
 using Messages;
 
 namespace EchangeDumpedMessagesListener
 {
     class Program
     {
-        private static readonly string MQCONNETIONSTRING = "host=10.69.0.117";
+        private static readonly string MQCONNETIONSTRING = ConfigurationManager.ConnectionStrings["spewsMQ"].ConnectionString;
+        
+        // host=myServer;virtualHost=myVirtualHost;username=mike;password=topsecret
 
         static void Main(string[] args)
         {
