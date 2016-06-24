@@ -7,7 +7,7 @@ namespace EchangeExporterProto
     {
         public ExchangeServer ExchangeServer { get; set; }
         public MessageQueue MessageQueue { get; set; }
-        public UserCredential UserCredential { get; set; }
+        public Credentials Credentials { get; set; }
     }
 
     public class ExchangeServer
@@ -26,7 +26,7 @@ namespace EchangeExporterProto
         public string Password { get; set; }
     }
 
-    public class UserCredential
+    public class Credentials
     {
         public string Login { get; set; }
         public string Password { get; set; }

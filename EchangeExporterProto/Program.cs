@@ -21,7 +21,7 @@ namespace EchangeExporterProto
         private static readonly JsonSerializerSettings serializerSettings = new JsonSerializerSettings {
             TypeNameHandling = TypeNameHandling.Auto,
             NullValueHandling = NullValueHandling.Ignore,
-            ContractResolver = new SkipRequestInfoContractResolver("Schema", "Service"),
+            ContractResolver = new SkipRequestInfoContractResolver("Schema", "Service", "MimeContent"),
             Error = (serializer, err) => err.ErrorContext.Handled = true,
         };
 
@@ -34,31 +34,22 @@ namespace EchangeExporterProto
                 Error("Could not find either a connection string or an host for MQ!");
                 return;
             }
+            
+            var queueConf = CompleteQueueConfigWithDefaults();
 
-            // Set default value when missing
-            var queueConf = new MessageQueue {
-                Host = config.MessageQueue.Host,
-                Username = config.MessageQueue.Username ?? "guest",
-                Password = config.MessageQueue.Password ?? "guest",
-                VirtualHost = config.MessageQueue.VirtualHost ?? "/",
-                Port = config.MessageQueue.Port != 0 ? config.MessageQueue.Port : 5672,
-                ConnectionString = config.MessageQueue.ConnectionString
-            };
-
-            if (String.IsNullOrWhiteSpace(config.UserCredential.Domain)
-                || String.IsNullOrWhiteSpace(config.UserCredential.Login)
-                || String.IsNullOrWhiteSpace(config.UserCredential.Password))
+            if (String.IsNullOrWhiteSpace(config.Credentials.Domain)
+                || String.IsNullOrWhiteSpace(config.Credentials.Login)
+                || String.IsNullOrWhiteSpace(config.Credentials.Password))
             {
                 Error("Provided credentials are incomplete!");
                 return;
             }
 
             if (String.IsNullOrWhiteSpace(queueConf.ConnectionString))
-                // config.MessageQueue.ConnectionString = String.Format("host={0}", config.MessageQueue.Host);
                 queueConf.ConnectionString = String.Format("host={0};virtualHost={1};username={2};password={3}",
                     queueConf.Host, queueConf.VirtualHost, queueConf.Username, queueConf.Password);            
 
-            ExchangeService service = ConnectToExchange(config.ExchangeServer, config.UserCredential);
+            ExchangeService service = ConnectToExchange(config.ExchangeServer, config.Credentials);
 
             using (var bus = RabbitHutch.CreateBus(queueConf.ConnectionString , serviceRegister => serviceRegister.Register<ISerializer>(
                     serviceProvider => new NullHandingJsonSerializer(new TypeNameSerializer()))))
@@ -74,6 +65,19 @@ namespace EchangeExporterProto
             Console.ReadLine();
         }
 
+        private static MessageQueue CompleteQueueConfigWithDefaults()
+        {
+            // Set default value when missing
+            return new MessageQueue {
+                Host = config.MessageQueue.Host,
+                Username = config.MessageQueue.Username ?? "guest",
+                Password = config.MessageQueue.Password ?? "guest",
+                VirtualHost = config.MessageQueue.VirtualHost ?? "/",
+                Port = config.MessageQueue.Port != 0 ? config.MessageQueue.Port : 5672,
+                ConnectionString = config.MessageQueue.ConnectionString
+            };
+        }
+
         private static string DumpAvailablePropsToJson(Appointment ev) {
             return JsonConvert.SerializeObject(ev, Formatting.Indented, serializerSettings);
         }
@@ -83,28 +87,18 @@ namespace EchangeExporterProto
             PropertySet includeMostProps = BuildAppointmentPropertySet();
             var foundEvents = service.FindItems(WellKnownFolderName.Calendar, new ItemView(int.MaxValue));
             var foundEventsWithProps = foundEvents.Select(app => Appointment.Bind(service, app.Id, includeMostProps));
+            var foundEventsAsMime = foundEvents.Select(app => app.MimeContent);
 
-            var appointmentsInfo = foundEventsWithProps.Select(RemoveTypings);
-
-            var appointmentAsMimeContent = foundEvents
-                .Select(app => Appointment.Bind(service, app.Id, new PropertySet(AppointmentSchema.MimeContent)))
-                .Select(app => app.MimeContent);
-
-            foundEvents.Zip(appointmentsInfo, (app, dyn) => new NewAppointmentDumped {
-                Id = app.Id.ToString(),
-                Appointment = dyn,
-            });
-
-            return foundEvents
-                .Zip(appointmentsInfo, (app, dyn) => new {
-                    Id = app.Id.ToString(),
-                    Appointment = dyn,
-                })
-                .Zip(appointmentAsMimeContent, (zip, mime) => new NewAppointmentDumped {
-                    Id = zip.Id,
-                    Appointment = zip.Appointment,
-                    MimeContent = Encoding.GetEncoding(mime.CharacterSet).GetString(mime.Content),
-                });
+            // Note that as we're dealing with anon types in below query, lambdas cannot be extracted & named
+            return foundEventsWithProps
+                .Select(RemoveTypings)
+                .Zip(foundEventsWithProps.Select(app => new { MimeContent = app.MimeContent, Id = app.Id }),
+                    (app, mime) => new NewAppointmentDumped {
+                        Id = mime.Id.ToString(),
+                        Appointment = app,
+                        MimeContent = Encoding.GetEncoding(mime.MimeContent.CharacterSet).GetString(mime.MimeContent.Content)
+                    }
+            );
         }
 
         private static PropertySet BuildAppointmentPropertySet()
@@ -127,6 +121,7 @@ namespace EchangeExporterProto
                             AppointmentSchema.Subject,
                 // AppointmentSchema.TextBody, // EWS 2013 only
                             AppointmentSchema.TimeZone,
+                            AppointmentSchema.MimeContent,
                             AppointmentSchema.When
                         );
         }
@@ -138,10 +133,13 @@ namespace EchangeExporterProto
             );
         }
 
-        private static ExchangeService ConnectToExchange(ExchangeServer exchange, UserCredential credential) {
+        private static ExchangeService ConnectToExchange(ExchangeServer exchange, Credentials credentials) {
             ExchangeService service = new ExchangeService(ExchangeVersion.Exchange2010_SP2);
+            // Ignoring invalid exchange server provided certificate, on purpose, Yay !
             ServicePointManager.ServerCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
-            service.Credentials = new WebCredentials(String.Format("{0}@{1}", credential.Login, credential.Domain), credential.Password);
+
+            service.Credentials = new NetworkCredential(credentials.Login, credentials.Password, credentials.Domain);
+            service.ImpersonatedUserId = new ImpersonatedUserId(ConnectingIdType.SmtpAddress, String.Format("{0}@{1}", "user1", "mslablgs.vm.obm-int.dc1"));
             string exchangeEndpoint = String.Format(exchange.EndpointTemplate, exchange.Host);
             service.Url = new Uri(exchangeEndpoint);
             return service;
