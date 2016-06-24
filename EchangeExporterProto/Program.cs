@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Text;
 using System.Net;
 using System.Collections.Generic;
@@ -8,15 +9,18 @@ using Microsoft.Exchange.WebServices.Data;
 using EasyNetQ;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using SimpleConfig;
 
 using Messages;
-using SimpleConfig;
+using CsvTargetAccountsProvider;
 
 namespace EchangeExporterProto
 {
     class Program
     {
         private static ExporterConfiguration config;
+        private static MailboxAccountsProvider accountsProvider = new MailboxAccountsProvider(',');
+        private static readonly string ACCOUNTSFILE = "targets.csv";
 
         private static readonly JsonSerializerSettings serializerSettings = new JsonSerializerSettings {
             TypeNameHandling = TypeNameHandling.Auto,
@@ -51,18 +55,35 @@ namespace EchangeExporterProto
 
             ExchangeService service = ConnectToExchange(config.ExchangeServer, config.Credentials);
 
+            // Get all mailbox accounts
+            var accountsFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), ACCOUNTSFILE);
+            var mailboxes = accountsProvider.GetFromCsvFile(accountsFilePath);
+
             using (var bus = RabbitHutch.CreateBus(queueConf.ConnectionString , serviceRegister => serviceRegister.Register<ISerializer>(
                     serviceProvider => new NullHandingJsonSerializer(new TypeNameSerializer()))))
             {
-                var foundEvents = FindAllMeetings(service);
-
-                foreach (var ev in foundEvents)
+                foreach (var mailbox in mailboxes)
                 {
-                    Console.WriteLine("Extracted with event #{0}. About to publish to {1}...", ev.Id, config.MessageQueue.Host);
-                    bus.Publish(ev);
+                    Console.WriteLine("Dumping calendar items for account: {0} ...", mailbox.PrimarySmtpAddress);
+                    ImpersonateQueries(service, mailbox.PrimarySmtpAddress);
+
+                    var foundEvents = FindAllMeetings(service);
+
+                    foreach (var ev in foundEvents)
+                    {
+                        Console.WriteLine("Extracted with event #{0}. About to publish to {1}...", ev.Id, config.MessageQueue.Host);
+                        bus.Publish(ev);
+                    }
                 }
+                
+
             }
             Console.ReadLine();
+        }
+
+        private static void ImpersonateQueries(ExchangeService service, string primaryAddress)
+        {
+            service.ImpersonatedUserId = new ImpersonatedUserId(ConnectingIdType.SmtpAddress, primaryAddress);
         }
 
         private static MessageQueue CompleteQueueConfigWithDefaults()
@@ -94,6 +115,7 @@ namespace EchangeExporterProto
                 .Select(RemoveTypings)
                 .Zip(foundEventsWithProps.Select(app => new { MimeContent = app.MimeContent, Id = app.Id }),
                     (app, mime) => new NewAppointmentDumped {
+                        Mailbox = service.ImpersonatedUserId.Id,
                         Id = mime.Id.ToString(),
                         Appointment = app,
                         MimeContent = Encoding.GetEncoding(mime.MimeContent.CharacterSet).GetString(mime.MimeContent.Content)
@@ -139,9 +161,9 @@ namespace EchangeExporterProto
             ServicePointManager.ServerCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
 
             service.Credentials = new NetworkCredential(credentials.Login, credentials.Password, credentials.Domain);
-            service.ImpersonatedUserId = new ImpersonatedUserId(ConnectingIdType.SmtpAddress, String.Format("{0}@{1}", "user1", "mslablgs.vm.obm-int.dc1"));
             string exchangeEndpoint = String.Format(exchange.EndpointTemplate, exchange.Host);
             service.Url = new Uri(exchangeEndpoint);
+            // service.ImpersonatedUserId = new ImpersonatedUserId(ConnectingIdType.SmtpAddress, String.Format("{0}@{1}", "user1", "mslablgs.vm.obm-int.dc1"));
             return service;
         }
 

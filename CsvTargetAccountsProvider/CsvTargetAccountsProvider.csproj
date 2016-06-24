@@ -48,6 +48,7 @@
   <ItemGroup>
     <Compile Include="CsvMailAccountMapping.cs" />
     <Compile Include="MailAccount.cs" />
+    <Compile Include="MailboxAccountsProvider.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

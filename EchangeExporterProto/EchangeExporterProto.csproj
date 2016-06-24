@@ -85,6 +85,10 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\CsvTargetAccountsProvider\CsvTargetAccountsProvider.csproj">
+      <Project>{6e001705-f8ec-4e0b-8e60-7ec780ca8c56}</Project>
+      <Name>CsvTargetAccountsProvider</Name>
+    </ProjectReference>
     <ProjectReference Include="..\Messages\Messages.csproj">
       <Project>{b349c004-61e7-47c0-a5cf-00cf9118eb5a}</Project>
       <Name>Messages</Name>
