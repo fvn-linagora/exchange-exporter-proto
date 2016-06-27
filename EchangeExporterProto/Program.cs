@@ -67,7 +67,7 @@ namespace EchangeExporterProto
                     Console.WriteLine("Dumping calendar items for account: {0} ...", mailbox.PrimarySmtpAddress);
                     ImpersonateQueries(service, mailbox.PrimarySmtpAddress);
 
-                    var foundEvents = FindAllMeetings(service);
+                    var foundEvents = FindAllMeetings(service, mailbox.PrimarySmtpAddress);
 
                     foreach (var ev in foundEvents)
                     {
@@ -103,24 +103,41 @@ namespace EchangeExporterProto
             return JsonConvert.SerializeObject(ev, Formatting.Indented, serializerSettings);
         }
 
-        private static IEnumerable<NewAppointmentDumped> FindAllMeetings(ExchangeService service)
+        private static IEnumerable<NewAppointmentDumped> FindAllMeetings(ExchangeService service, String primaryEmailAddress)
         {
             PropertySet includeMostProps = BuildAppointmentPropertySet();
-            var foundEvents = service.FindItems(WellKnownFolderName.Calendar, new ItemView(int.MaxValue));
-            var foundEventsWithProps = foundEvents.Select(app => Appointment.Bind(service, app.Id, includeMostProps));
-            var foundEventsAsMime = foundEvents.Select(app => app.MimeContent);
+            var appIdsView = new ItemView(int.MaxValue) { PropertySet = BasePropertySet.IdOnly};
 
-            // Note that as we're dealing with anon types in below query, lambdas cannot be extracted & named
+            var foundEventsWithProps = GetAllCalendars(service)
+                // .Where(cal => cal.DisplayName == "SubCalendar1" || cal.DisplayName == "SecondRootCalendar")
+                .SelectMany(calendar => service.FindItems(calendar.Id, appIdsView))
+                .Select(app => Appointment.Bind(service, app.Id, includeMostProps))
+                .Select(app => new {
+                    Mailbox = primaryEmailAddress,
+                    Folder = app.ParentFolderId,
+                    Appointment = app
+                });
+
+            var foundEventsAsMime = foundEventsWithProps.Select(appCtx => appCtx.Appointment.MimeContent);
+
             return foundEventsWithProps
-                .Select(RemoveTypings)
-                .Zip(foundEventsWithProps.Select(app => new { MimeContent = app.MimeContent, Id = app.Id }),
-                    (app, mime) => new NewAppointmentDumped {
-                        Mailbox = service.ImpersonatedUserId.Id,
-                        Id = mime.Id.ToString(),
-                        Appointment = app,
-                        MimeContent = Encoding.GetEncoding(mime.MimeContent.CharacterSet).GetString(mime.MimeContent.Content)
-                    }
-            );
+                .Select(appCtx => new NewAppointmentDumped {
+                    Mailbox = appCtx.Mailbox,
+                    Id = appCtx.Appointment.Id.ToString(),
+                    Appointment = RemoveTypings(appCtx.Appointment),
+                    MimeContent = Encoding.GetEncoding(appCtx.Appointment.MimeContent.CharacterSet).GetString(appCtx.Appointment.MimeContent.Content)
+                });
+        }
+
+        private static IEnumerable<CalendarFolder> GetAllCalendars(ExchangeService service)
+        {
+            int folderViewSize = int.MaxValue; // Kids, dont do this at home !
+            FolderView view = new FolderView(folderViewSize);
+            view.PropertySet = new PropertySet(BasePropertySet.IdOnly, FolderSchema.DisplayName, FolderSchema.FolderClass);
+            view.Traversal = FolderTraversal.Deep;
+            FindFoldersResults findFolderResults = service.FindFolders(WellKnownFolderName.MsgFolderRoot, view);
+
+            return findFolderResults.OfType<CalendarFolder>();
         }
 
         private static PropertySet BuildAppointmentPropertySet()
@@ -129,6 +146,8 @@ namespace EchangeExporterProto
                             BasePropertySet.FirstClassProperties,
                             AppointmentSchema.AppointmentType,
                             AppointmentSchema.Body,
+                            AppointmentSchema.RequiredAttendees, 
+                            AppointmentSchema.OptionalAttendees,
                             AppointmentSchema.Categories,
                             AppointmentSchema.Culture,
                             AppointmentSchema.DateTimeCreated,
@@ -163,7 +182,6 @@ namespace EchangeExporterProto
             service.Credentials = new NetworkCredential(credentials.Login, credentials.Password, credentials.Domain);
             string exchangeEndpoint = String.Format(exchange.EndpointTemplate, exchange.Host);
             service.Url = new Uri(exchangeEndpoint);
-            // service.ImpersonatedUserId = new ImpersonatedUserId(ConnectingIdType.SmtpAddress, String.Format("{0}@{1}", "user1", "mslablgs.vm.obm-int.dc1"));
             return service;
         }
 
