@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 
 using Microsoft.Exchange.WebServices.Data;
+using EWSAppointment = Microsoft.Exchange.WebServices.Data.Appointment;
 using EasyNetQ;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -99,7 +100,8 @@ namespace EchangeExporterProto
             };
         }
 
-        private static string DumpAvailablePropsToJson(Appointment ev) {
+        private static string DumpAvailablePropsToJson(EWSAppointment ev)
+        {
             return JsonConvert.SerializeObject(ev, Formatting.Indented, serializerSettings);
         }
 
@@ -111,7 +113,7 @@ namespace EchangeExporterProto
             var foundEventsWithProps = GetAllCalendars(service)
                 // .Where(cal => cal.DisplayName == "SubCalendar1" || cal.DisplayName == "SecondRootCalendar")
                 .SelectMany(calendar => service.FindItems(calendar.Id, appIdsView))
-                .Select(app => Appointment.Bind(service, app.Id, includeMostProps))
+                .Select(app => EWSAppointment.Bind(service, app.Id, includeMostProps))
                 .Select(app => new {
                     Mailbox = primaryEmailAddress,
                     Folder = app.ParentFolderId,
@@ -123,6 +125,7 @@ namespace EchangeExporterProto
             return foundEventsWithProps
                 .Select(appCtx => new NewAppointmentDumped {
                     Mailbox = appCtx.Mailbox,
+                    FolderId = appCtx.Folder.UniqueId,
                     Id = appCtx.Appointment.Id.ToString(),
                     Appointment = RemoveTypings(appCtx.Appointment),
                     MimeContent = Encoding.GetEncoding(appCtx.Appointment.MimeContent.CharacterSet).GetString(appCtx.Appointment.MimeContent.Content)
@@ -167,11 +170,15 @@ namespace EchangeExporterProto
                         );
         }
 
-        private static JObject RemoveTypings(Appointment app)
+        private static Messages.Appointment RemoveTypings(EWSAppointment app)
         {
-            return JsonConvert.DeserializeObject<JObject>(
-                JsonConvert.SerializeObject(app, Formatting.Indented, serializerSettings)
-            );
+            //return JsonConvert.DeserializeObject<JObject>(
+            //    JsonConvert.SerializeObject(app, Formatting.Indented, serializerSettings)
+            //);
+
+            var serializedPayload = JsonConvert.SerializeObject(app, Formatting.Indented, serializerSettings);
+            return JsonConvert.DeserializeObject<Messages.Appointment>(serializedPayload);
+
         }
 
         private static ExchangeService ConnectToExchange(ExchangeServer exchange, Credentials credentials) {
