@@ -8,6 +8,7 @@
         public string FolderId { get; set; }
         public string Id { get; set; }
         public string MimeContent { get; set; }
+        public string SourceAsJson { get; set; }
         public Appointment Appointment { get; set; }
     }
 
