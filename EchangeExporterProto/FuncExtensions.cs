@@ -1,12 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace EchangeExporterProto
 {
     public static class FuncExtensions
     {
-        private static Func<A, R> Memoize<A, R>(this Func<A, R> f)
+        public static Func<A, R> Memoize<A, R>(this Func<A, R> f)
         {
             var map = new Dictionary<A, R>();
             return a => {
@@ -17,6 +16,11 @@ namespace EchangeExporterProto
                 map.Add(a, value);
                 return value;
             };
+        }
+
+        public static Func<B, R> Partial<A, B, R>(this Func<A, B, R> f, A a)
+        {
+            return b => f(a, b);
         }
     }
 }

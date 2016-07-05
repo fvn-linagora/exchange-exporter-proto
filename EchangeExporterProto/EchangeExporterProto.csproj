@@ -74,8 +74,11 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AttachmentWithContext.cs" />
     <Compile Include="ExporterConfiguration.cs" />
+    <Compile Include="FuncExtensions.cs" />
     <Compile Include="NullHandingJsonSerializer.cs" />
+    <Compile Include="PagedItemsSearch.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="SkipRequestInfoContractResolver.cs" />

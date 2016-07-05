@@ -11,7 +11,6 @@ using EWSItemId = Microsoft.Exchange.WebServices.Data.ItemId;
 using EWSAppointmentType = Microsoft.Exchange.WebServices.Data.AppointmentType;
 using EasyNetQ;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using SimpleConfig;
 
 using Messages;
@@ -59,6 +58,137 @@ namespace EchangeExporterProto
 
             ExchangeService service = ConnectToExchange(config.ExchangeServer, config.Credentials);
 
+            ExportAndPublishAppointments(queueConf, service);
+            ExportAndPublishAddressBooks(queueConf, service);
+            var attachedMessages = ExportAppointmentsAttachedFiles(service).Select(MapToAttachmentMessage);
+            PublishToBus(attachedMessages, queueConf);
+
+            Console.ReadLine();
+        }
+
+        private static NewEventAttachment MapToAttachmentMessage(AttachmentWithContext attachment)
+        {
+            if (attachment.Attachment.Content == null)
+                attachment.Attachment.Load();
+
+            return new NewEventAttachment {
+                Id = Guid.NewGuid(),
+                CreationDate = DateTime.UtcNow,
+                LastModified = attachment.Appointment.LastModifiedTime,
+                PrimaryEmailAddress = attachment.Mailbox.PrimarySmtpAddress,
+                CalendarId = attachment.Calendar.Id.UniqueId,
+                AppointmentId = attachment.Appointment.Id.UniqueId,
+                Content = attachment.Attachment.Content
+            };
+        }
+
+        private static void PublishToBus<T>(IEnumerable<T> messages, MessageQueue queueConf) where T: class, new()
+        {
+            using (var bus = RabbitHutch.CreateBus(queueConf.ConnectionString ,
+                serviceRegister => serviceRegister.Register<ISerializer>(
+                    serviceProvider => new NullHandingJsonSerializer(new TypeNameSerializer()))))
+            {
+                foreach (var message in messages)
+                {
+                    bus.Publish(message);
+                }
+            }
+        }
+
+        private static IEnumerable<AttachmentWithContext> ExportAppointmentsAttachedFiles(ExchangeService service)
+        {
+            var itemView = new ItemView(int.MaxValue) { PropertySet = new PropertySet(BasePropertySet.IdOnly, ItemSchema.Subject, ItemSchema.HasAttachments) };
+
+            // Get all mailbox accounts
+            var accountsFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), ACCOUNTSFILE);
+            var mailboxes = accountsProvider.GetFromCsvFile(accountsFilePath);
+
+            Func<MailAccount, ExchangeService> ewsProvider = account => ImpersonateQueries(service, account.PrimarySmtpAddress); ;
+            var serviceConfiguratorFor = ewsProvider.Memoize();
+
+            var allFileAttachments = mailboxes
+                .Select(acc => new { Mailbox = acc, Service = serviceConfiguratorFor(acc) })
+                .SelectMany(x => GetAllCalendars(x.Service),
+                    (x, Calendar) => new { x.Mailbox, x.Service, Calendar })
+                .SelectMany(x => GetAppointmentsHavingAttachments(x.Calendar, itemView, x.Service),
+                    (x, app) => new { Appointment = app, x.Mailbox, x.Calendar })
+                .SelectMany(x => x.Appointment.Attachments.OfType<FileAttachment>(),
+                    (x, att) => new AttachmentWithContext {
+                        Mailbox = x.Mailbox,
+                        Calendar = x.Calendar,
+                        Appointment = x.Appointment,
+                        Attachment = att,
+                    })
+                ;
+
+            return allFileAttachments;
+        }
+
+        static IEnumerable<EWSAppointment> GetAppointmentsHavingAttachments(CalendarFolder calendar, ItemView itemView, ExchangeService service)
+        {
+            var events = calendar.FindItems(itemView).ToList();
+            int nbAppointmentsWithAttachments = events.Count(e => e.HasAttachments);
+            Console.WriteLine("found {0} appointments having attached files !", nbAppointmentsWithAttachments);
+            var appointmentIdsHavingAttachments = events.Where(e => e.HasAttachments).Select(e => e.Id).ToList();
+            if (appointmentIdsHavingAttachments.Count <= 0)
+                return Enumerable.Empty<EWSAppointment>();
+            var appointmentsWithAttachments = service.BindToItems(
+                appointmentIdsHavingAttachments,
+                new PropertySet(BasePropertySet.IdOnly,
+                    ItemSchema.Attachments,
+                    ItemSchema.HasAttachments,
+                    ItemSchema.LastModifiedTime)
+            );
+            return appointmentsWithAttachments
+                .Where(res => res.Result == ServiceResult.Success)
+                .Select(res => res.Item)
+                .Cast<EWSAppointment>();
+        }
+
+        private static void ExportAndPublishAddressBooks(MessageQueue queueConf, ExchangeService service)
+        {
+            // Get all mailbox accounts
+            var accountsFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), ACCOUNTSFILE);
+            var mailboxes = accountsProvider.GetFromCsvFile(accountsFilePath);
+
+            var folderView = new FolderView(100) {
+                PropertySet = new PropertySet(
+                    BasePropertySet.IdOnly,
+                    FolderSchema.DisplayName,
+                    FolderSchema.FolderClass),
+                Traversal = FolderTraversal.Deep
+            };
+            SearchFilter searchFilter = new SearchFilter.IsEqualTo(FolderSchema.FolderClass, "IPF.Contact");
+
+            foreach(var box in mailboxes)
+            {
+                Console.WriteLine("Dumping CONTACTs for account: {0} ...", box.PrimarySmtpAddress);
+                ImpersonateQueries(service, box.PrimarySmtpAddress);
+
+                var rootFolder = Folder.Bind(service, WellKnownFolderName.MsgFolderRoot);
+
+                var addressBooks = rootFolder.FindFolders(searchFilter, folderView);
+                var addressBookMessages = addressBooks
+                    .Select(book => new NewAddressBook
+                    {
+                        Id = Guid.NewGuid(),
+                        CreationDate = DateTime.UtcNow,
+                        PrimaryEmailAddress = box.PrimarySmtpAddress,
+                        AddressBookId = book.Id.UniqueId,
+                        DisplayName = book.DisplayName,
+                    })
+                    .ToList();
+                addressBookMessages.ForEach(book => Console.WriteLine("Mailbox: {2}, Book #{0} , DisplayName: {1}", book.Id, book.DisplayName, book.PrimaryEmailAddress));
+
+                PublishToBus(addressBookMessages, queueConf);
+            }
+
+        }
+
+        private static void ExportAndPublishAppointments(MessageQueue queueConf, ExchangeService service)
+        {
+            var findAllAppointments = new Func<ExchangeService, FolderId, IEnumerable<EWSAppointment>>(FindAllAppointments).Partial(service);
+
             // Get all mailbox accounts
             var accountsFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), ACCOUNTSFILE);
             var mailboxes = accountsProvider.GetFromCsvFile(accountsFilePath);
@@ -79,15 +209,15 @@ namespace EchangeExporterProto
                         bus.Publish(ev);
                     }
                 }
-                
+
 
             }
-            Console.ReadLine();
         }
 
-        private static void ImpersonateQueries(ExchangeService service, string primaryAddress)
+        private static ExchangeService ImpersonateQueries(ExchangeService service, string primaryAddress)
         {
             service.ImpersonatedUserId = new ImpersonatedUserId(ConnectingIdType.SmtpAddress, primaryAddress);
+            return service;
         }
 
         private static MessageQueue CompleteQueueConfigWithDefaults()
@@ -111,24 +241,14 @@ namespace EchangeExporterProto
         private static IEnumerable<NewAppointmentDumped> FindAllMeetings(ExchangeService service, String primaryEmailAddress)
         {
             PropertySet includeMostProps = BuildAppointmentPropertySet();
-            // TODO: fix FindItems paged results
-            // Beware: there is a server-based limit in paged size length (<1000 items)
-            // may have to iterate over paged-results eventually, using a loop and FindItemResults<Item>.MoreAvailable prop ?
-            var appIdsView = new ItemView(int.MaxValue) {
-                PropertySet = new PropertySet(BasePropertySet.IdOnly, AppointmentSchema.AppointmentType)
-            };
-            // var appIdsView = new CalendarView(DateTime.UtcNow.AddYears(-1), DateTime.UtcNow);
+
+            var findAllAppointments = new Func<ExchangeService, FolderId,IEnumerable<EWSAppointment>>(FindAllAppointments).Partial(service);
 
             IQueryable<EWSAppointment> mailboxAppointments = GetAllCalendars(service)
-                .Where(cal => cal.DisplayName == "SubCalendar1" || cal.DisplayName == "SecondRootCalendar")
-                // .Take(1) // TODO: DEBUG REMOVE ME
-                .SelectMany(calendar => service.FindItems(calendar.Id, appIdsView))
+                // .Where(cal => cal.DisplayName == "SubCalendar1" || cal.DisplayName == "SecondRootCalendar")
+                .Select(calendar => calendar.Id)
+                .SelectMany(findAllAppointments)
                 .Cast<EWSAppointment>().AsQueryable();
-
-            //var testApp = mailboxAppointments.ToList();
-            //var testReccMasters = testApp.Where(app => app.AppointmentType == AppointmentType.RecurringMaster).ToList();
-            //var testOccApp = testApp.Where(app => app.AppointmentType == AppointmentType.Exception).ToList();
-            //var testOcc2App = testApp.Where(app => app.AppointmentType == AppointmentType.Occurrence).ToList();
 
             var singleAndReccurringMasterAppointments = mailboxAppointments.Where(app => singleAndRecurringMasterAppointmentTypes.Contains(app.AppointmentType));
 
@@ -151,6 +271,17 @@ namespace EchangeExporterProto
                 });
 
             return messagesForExportingSingleAndReccurenceAppointments;
+        }
+
+        private static IEnumerable<EWSAppointment> FindAllAppointments(ExchangeService service, FolderId calendarId)
+        {
+            var appIdsView = new ItemView(int.MaxValue) {
+                PropertySet = new PropertySet(BasePropertySet.IdOnly, AppointmentSchema.AppointmentType)
+            };
+
+            var result = PagedItemsSearch.PageSearchItems<EWSAppointment>(service, calendarId, 500, appIdsView.PropertySet, AppointmentSchema.DateTimeCreated);
+
+            return result;
         }
 
         private static SearchFilter SkipAppointmentsOfType(EWSAppointmentType typeToSkip)
@@ -178,24 +309,24 @@ namespace EchangeExporterProto
             return new PropertySet(
                             BasePropertySet.FirstClassProperties,
                             AppointmentSchema.AppointmentType,
-                            AppointmentSchema.Body,
+                            ItemSchema.Body,
                             AppointmentSchema.RequiredAttendees, 
                             AppointmentSchema.OptionalAttendees,
-                            AppointmentSchema.Categories,
-                            AppointmentSchema.Culture,
-                            AppointmentSchema.DateTimeCreated,
-                            AppointmentSchema.DateTimeReceived,
-                            AppointmentSchema.DateTimeSent,
-                            AppointmentSchema.DisplayTo,
-                            AppointmentSchema.DisplayCc,
+                            ItemSchema.Categories,
+                            ItemSchema.Culture,
+                            ItemSchema.DateTimeCreated,
+                            ItemSchema.DateTimeReceived,
+                            ItemSchema.DateTimeSent,
+                            ItemSchema.DisplayTo,
+                            ItemSchema.DisplayCc,
                             AppointmentSchema.Duration,
                             AppointmentSchema.End,
                             AppointmentSchema.Start,
                             AppointmentSchema.StartTimeZone,
-                            AppointmentSchema.Subject,
+                            ItemSchema.Subject,
                 // AppointmentSchema.TextBody, // EWS 2013 only
                             AppointmentSchema.TimeZone,
-                            AppointmentSchema.MimeContent,
+                            ItemSchema.MimeContent,
                             AppointmentSchema.ModifiedOccurrences,
                             AppointmentSchema.DeletedOccurrences,
                             AppointmentSchema.IsRecurring, 
@@ -215,6 +346,8 @@ namespace EchangeExporterProto
         {
             if (appointment.AppointmentType != EWSAppointmentType.RecurringMaster)
                 return Convert(appointment);
+            if (appointment.ModifiedOccurrences == null)
+                return Convert(appointment);
 
             var reccurenceExceptionIds = appointment.ModifiedOccurrences.Select(occ => occ.ItemId);
             var reccurenceExceptionsAttendees = reccurenceExceptionIds
@@ -222,8 +355,7 @@ namespace EchangeExporterProto
                     BasePropertySet.IdOnly, AppointmentSchema.RequiredAttendees, AppointmentSchema.OptionalAttendees)))
                 .ToDictionary( k => ConvertIdFrom(k.Id), v => v );
 
-            var serializedPayload = JsonConvert.SerializeObject(appointment, Formatting.Indented, serializerSettings);
-            var dtoAppointment = JsonConvert.DeserializeObject<Messages.Appointment>(serializedPayload);
+            var dtoAppointment = Convert(appointment);
 
             foreach (var occurence in dtoAppointment.ModifiedOccurrences)
             {
