@@ -1,15 +1,20 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 2013
-VisualStudioVersion = 12.0.40629.0
+# Visual Studio 14
+VisualStudioVersion = 14.0.25420.1
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EchangeExporterProto", "EchangeExporterProto\EchangeExporterProto.csproj", "{AE5F7F49-AF74-405B-955D-B0C8CF0CABD8}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".paket", ".paket", "{1BCD931E-E05E-4A82-B7C4-4DC849ED2A9C}"
+	ProjectSection(SolutionItems) = preProject
+		paket.dependencies = paket.dependencies
+	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Messages", "Messages\Messages.csproj", "{B349C004-61E7-47C0-A5CF-00CF9118EB5A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EchangeExporterProto", "src\EchangeExporterProto\EchangeExporterProto.csproj", "{AE5F7F49-AF74-405B-955D-B0C8CF0CABD8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EchangeDumpedMessagesListener", "EchangeDumpedMessagesListener\EchangeDumpedMessagesListener.csproj", "{0D888280-4333-4E3A-994B-B706280540C0}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Messages", "src\Messages\Messages.csproj", "{B349C004-61E7-47C0-A5CF-00CF9118EB5A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CsvTargetAccountsProvider", "CsvTargetAccountsProvider\CsvTargetAccountsProvider.csproj", "{6E001705-F8EC-4E0B-8E60-7EC780CA8C56}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EchangeDumpedMessagesListener", "src\EchangeDumpedMessagesListener\EchangeDumpedMessagesListener.csproj", "{0D888280-4333-4E3A-994B-B706280540C0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CsvTargetAccountsProvider", "src\CsvTargetAccountsProvider\CsvTargetAccountsProvider.csproj", "{6E001705-F8EC-4E0B-8E60-7EC780CA8C56}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

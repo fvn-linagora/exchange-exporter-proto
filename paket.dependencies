@@ -1,0 +1,25 @@
+source https://nuget.org/api/v2
+
+  nuget FSharp.Core redirects: force
+  nuget DDay.iCal 1.0.2.575
+  nuget EasyNetQ.Rx 0.9.38
+  nuget Microsoft.Exchange.WebServices 2.2
+  nuget Newtonsoft.Json 8.0.3
+  nuget SimpleConfig 1.0.43.0
+  nuget TinyCsvParser 1.2
+  nuget NUnit ~> 2
+
+group Build
+  source https://nuget.org/api/v2
+
+  nuget SourceLink.Fake
+  nuget FAKE
+  nuget FSharp.Formatting
+
+  github fsharp/FAKE modules/Octokit/Octokit.fsx
+
+group Test
+  source https://nuget.org/api/v2
+
+  nuget NUnit ~> 2
+  nuget NUnit.Runners ~> 2
