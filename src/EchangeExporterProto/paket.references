@@ -2,3 +2,4 @@ EasyNetQ
 Microsoft.Exchange.WebServices
 Newtonsoft.Json
 SimpleConfig
+CommandLineParser

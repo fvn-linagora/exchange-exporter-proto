@@ -12,18 +12,40 @@ using EWSAppointmentType = Microsoft.Exchange.WebServices.Data.AppointmentType;
 using EasyNetQ;
 using Newtonsoft.Json;
 using SimpleConfig;
+using CommandLine;
 
 using Messages;
 using CsvTargetAccountsProvider;
 
 namespace EchangeExporterProto
 {
+    class Options
+    {
+        // [Option('t', "targets", Required = true,
+        [Option('t', "targets",
+          HelpText = "Input mailboxes to be processed.")]
+        public string TargetsListFile { get; set; }
+
+        [Option('c', "config",
+           HelpText = "Configuration file path.")]
+        public string ConfigPath { get; set; }
+
+        [Option(
+          HelpText = "Prints all messages to standard output.")]
+        public bool Verbose { get; set; }
+    }
+
     class Program
     {
+        private const string EXPORTER_CONFIG_SECTION = "exporterConfiguration";
+        private const string DEFAULT_EXPORTER_CONFIG = "ExchangeExporter.config";
+        private const string ENV_EXPORTER_CONFIG = "EXPORTER_CONFIG";
         private static ExporterConfiguration config;
         private static MailboxAccountsProvider accountsProvider = new MailboxAccountsProvider(',');
         private static readonly string ACCOUNTSFILE = "targets.csv";
         private static ICollection<EWSAppointmentType> singleAndRecurringMasterAppointmentTypes = new List<EWSAppointmentType> { EWSAppointmentType.RecurringMaster, EWSAppointmentType.Single };
+
+        private static readonly ILog log = new ConsoleLogger();
 
         private static readonly JsonSerializerSettings serializerSettings = new JsonSerializerSettings {
             TypeNameHandling = TypeNameHandling.Auto,
@@ -34,14 +56,23 @@ namespace EchangeExporterProto
 
         static void Main(string[] args)
         {
-            config = Configuration.Load<ExporterConfiguration>();
+            var result = Parser.Default.ParseArguments<Options>(args);
+            var arguments = result
+                .MapResult( options => options, errors => {
+                    log.Error( String.Format("Found issues with '{0}' Invalid parameters provided, exiting ...", String.Join("\n", errors) ));
+                    Environment.Exit(1);
+                    return default(Options);
+                });
+
+            config = new Configuration(configPath: GetConfigPath(arguments)).LoadSection<ExporterConfiguration>(EXPORTER_CONFIG_SECTION);
+            var mailboxes = GetTargetAccounts(arguments);
 
             if (String.IsNullOrWhiteSpace(config.MessageQueue.ConnectionString) && String.IsNullOrWhiteSpace(config.MessageQueue.Host))
             {
                 Error("Could not find either a connection string or an host for MQ!");
                 return;
             }
-            
+
             var queueConf = CompleteQueueConfigWithDefaults();
 
             if (String.IsNullOrWhiteSpace(config.Credentials.Domain)
@@ -54,16 +85,29 @@ namespace EchangeExporterProto
 
             if (String.IsNullOrWhiteSpace(queueConf.ConnectionString))
                 queueConf.ConnectionString = String.Format("host={0};virtualHost={1};username={2};password={3}",
-                    queueConf.Host, queueConf.VirtualHost, queueConf.Username, queueConf.Password);            
+                    queueConf.Host, queueConf.VirtualHost, queueConf.Username, queueConf.Password);
 
             ExchangeService service = ConnectToExchange(config.ExchangeServer, config.Credentials);
 
-            ExportAndPublishAppointments(queueConf, service);
-            ExportAndPublishAddressBooks(queueConf, service);
-            var attachedMessages = ExportAppointmentsAttachedFiles(service).Select(MapToAttachmentMessage);
+            ExportAndPublishAppointments(queueConf, service, mailboxes);
+            ExportAndPublishAddressBooks(queueConf, service, mailboxes);
+            var attachedMessages = ExportAppointmentsAttachedFiles(service, mailboxes).Select(MapToAttachmentMessage);
             PublishToBus(attachedMessages, queueConf);
 
             Console.ReadLine();
+        }
+
+        private static string GetConfigPath(Options arguments)
+        {
+            string configPath =
+                // First check args
+                (String.IsNullOrWhiteSpace(arguments.ConfigPath) ? null : arguments.ConfigPath)
+                // Then ENV variable
+                ?? Environment.GetEnvironmentVariable(ENV_EXPORTER_CONFIG)
+                // Then get default path
+                ?? DEFAULT_EXPORTER_CONFIG;
+
+            return Path.GetFullPath(configPath);
         }
 
         private static NewEventAttachment MapToAttachmentMessage(AttachmentWithContext attachment)
@@ -95,13 +139,27 @@ namespace EchangeExporterProto
             }
         }
 
-        private static IEnumerable<AttachmentWithContext> ExportAppointmentsAttachedFiles(ExchangeService service)
+        private static IEnumerable<MailAccount> GetTargetAccounts(Options arguments)
+        {
+            var accountsFilePath = FindTargetAccountsFile(arguments) ??
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), ACCOUNTSFILE);
+            return accountsProvider.GetFromCsvFile(accountsFilePath);
+        }
+
+        private static string FindTargetAccountsFile(Options arguments)
+        {
+            if (String.IsNullOrWhiteSpace(arguments.TargetsListFile))
+                return null;
+            if (Path.GetFullPath(arguments.TargetsListFile) == null)
+                return null;
+            if (!File.Exists(arguments.TargetsListFile))
+                return null;
+            return arguments.TargetsListFile;
+        }
+
+        private static IEnumerable<AttachmentWithContext> ExportAppointmentsAttachedFiles(ExchangeService service, IEnumerable<MailAccount> mailboxes)
         {
             var itemView = new ItemView(int.MaxValue) { PropertySet = new PropertySet(BasePropertySet.IdOnly, ItemSchema.Subject, ItemSchema.HasAttachments) };
-
-            // Get all mailbox accounts
-            var accountsFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), ACCOUNTSFILE);
-            var mailboxes = accountsProvider.GetFromCsvFile(accountsFilePath);
 
             Func<MailAccount, ExchangeService> ewsProvider = account => ImpersonateQueries(service, account.PrimarySmtpAddress); ;
             var serviceConfiguratorFor = ewsProvider.Memoize();
@@ -145,12 +203,8 @@ namespace EchangeExporterProto
                 .Cast<EWSAppointment>();
         }
 
-        private static void ExportAndPublishAddressBooks(MessageQueue queueConf, ExchangeService service)
+        private static void ExportAndPublishAddressBooks(MessageQueue queueConf, ExchangeService service, IEnumerable<MailAccount> mailboxes)
         {
-            // Get all mailbox accounts
-            var accountsFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), ACCOUNTSFILE);
-            var mailboxes = accountsProvider.GetFromCsvFile(accountsFilePath);
-
             var folderView = new FolderView(100) {
                 PropertySet = new PropertySet(
                     BasePropertySet.IdOnly,
@@ -185,13 +239,9 @@ namespace EchangeExporterProto
 
         }
 
-        private static void ExportAndPublishAppointments(MessageQueue queueConf, ExchangeService service)
+        private static void ExportAndPublishAppointments(MessageQueue queueConf, ExchangeService service, IEnumerable<MailAccount> mailboxes)
         {
             var findAllAppointments = new Func<ExchangeService, FolderId, IEnumerable<EWSAppointment>>(FindAllAppointments).Partial(service);
-
-            // Get all mailbox accounts
-            var accountsFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), ACCOUNTSFILE);
-            var mailboxes = accountsProvider.GetFromCsvFile(accountsFilePath);
 
             using (var bus = RabbitHutch.CreateBus(queueConf.ConnectionString , serviceRegister => serviceRegister.Register<ISerializer>(
                     serviceProvider => new NullHandingJsonSerializer(new TypeNameSerializer()))))
