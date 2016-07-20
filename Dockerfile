@@ -1,4 +1,4 @@
-FROM fvignon/fsprojectscaffold
+FROM linagofab/fsprojectscaffold
 
 MAINTAINER Fabien <fvignon@linagora.com>
 
