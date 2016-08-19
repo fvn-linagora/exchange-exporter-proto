@@ -5,15 +5,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["/binaries/EchangeExporterProto/EchangeExporterProto.exe", "--help"]
+    command: ["/binaries/EchangeExporterProto/EchangeExporterProto.exe", "--config", "/config/exporter.config", "--targets", "/config/targets.csv"]
     volumes:
-      - dot-nuget:/root/.nuget
-      - nuget-cache:/root/.local/share/NuGet/Cache
-
-volumes:
-  dot-nuget:
-    external:
-      name: ./CACHE/dot-nuget
-  nuget-cache:
-    external:
-      name: ./CACHE/nuget-cache
+      - $PWD:/config

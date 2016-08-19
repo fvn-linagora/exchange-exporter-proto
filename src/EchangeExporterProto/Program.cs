@@ -57,15 +57,10 @@ namespace EchangeExporterProto
         static void Main(string[] args)
         {
             var result = Parser.Default.ParseArguments<Options>(args);
-            var arguments = result
-                .MapResult( options => options, errors => {
-                    log.Error( String.Format("Found issues with '{0}' Invalid parameters provided, exiting ...", String.Join("\n", errors) ));
-                    Environment.Exit(1);
-                    return default(Options);
-                });
+            var arguments = result.MapResult( options => options, ArgumentErrorHandler);
 
             config = new Configuration(configPath: GetConfigPath(arguments)).LoadSection<ExporterConfiguration>(EXPORTER_CONFIG_SECTION);
-            var mailboxes = GetTargetAccounts(arguments);
+            var mailboxes = GetTargetAccounts(arguments).ToList();
 
             if (String.IsNullOrWhiteSpace(config.MessageQueue.ConnectionString) && String.IsNullOrWhiteSpace(config.MessageQueue.Host))
             {
@@ -97,7 +92,13 @@ namespace EchangeExporterProto
             Console.ReadLine();
         }
 
-        private static string GetConfigPath(Options arguments)
+        private static Options ArgumentErrorHandler(IEnumerable<Error> errors) {
+            log.Error( String.Format("Found issues with '{0}'", String.Join("\n", errors) ));
+            Environment.Exit(1);
+            return default(Options);
+        }
+
+    private static string GetConfigPath(Options arguments)
         {
             string configPath =
                 // First check args

@@ -2,4 +2,8 @@ FROM linagofab/fsprojectscaffold
 
 MAINTAINER Fabien <fvignon@linagora.com>
 
-CMD ["/binaries/EchangeExporterProto/EchangeExporterProto.exe"]
+RUN mkdir -p /config
+
+VOLUME ["/config"]
+
+CMD ["/binaries/EchangeExporterProto/EchangeExporterProto.exe", "--help"]
