@@ -1,4 +1,6 @@
 FSharp.Core
+
 group Test
+NFluent
 NUnit
 NUnit.Runners

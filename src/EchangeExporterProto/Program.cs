@@ -162,7 +162,7 @@ namespace EchangeExporterProto
         {
             var itemView = new ItemView(int.MaxValue) { PropertySet = new PropertySet(BasePropertySet.IdOnly, ItemSchema.Subject, ItemSchema.HasAttachments) };
 
-            Func<MailAccount, ExchangeService> ewsProvider = account => ImpersonateQueries(service, account.PrimarySmtpAddress); ;
+            Func<MailAccount, ExchangeService> ewsProvider = account => ImpersonateQueries(service, account.PrimarySmtpAddress);
             var serviceConfiguratorFor = ewsProvider.Memoize();
 
             var allFileAttachments = mailboxes

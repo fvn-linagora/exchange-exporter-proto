@@ -3,7 +3,8 @@ source https://nuget.org/api/v2
   nuget CommandLineParser 2.0.275-beta beta
   nuget FSharp.Core redirects: force
   nuget DDay.iCal 1.0.2.575
-  nuget EasyNetQ.Rx 0.9.38
+  nuget EasyNetQ ~> 0
+  nuget RabbitMQ.Client ~> 3
   nuget Microsoft.Exchange.WebServices 2.2
   nuget Newtonsoft.Json 8.0.3
   nuget SimpleConfig 1.0.43.0
@@ -23,5 +24,6 @@ group Build
 group Test
   source https://nuget.org/api/v2
 
+  nuget NFluent
   nuget NUnit ~> 2
   nuget NUnit.Runners ~> 2
