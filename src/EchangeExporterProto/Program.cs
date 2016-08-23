@@ -242,8 +242,6 @@ namespace EchangeExporterProto
 
         private static void ExportAndPublishAppointments(MessageQueue queueConf, ExchangeService service, IEnumerable<MailAccount> mailboxes)
         {
-            var findAllAppointments = new Func<ExchangeService, FolderId, IEnumerable<EWSAppointment>>(FindAllAppointments).Partial(service);
-
             using (var bus = RabbitHutch.CreateBus(queueConf.ConnectionString , serviceRegister => serviceRegister.Register<ISerializer>(
                     serviceProvider => new NullHandingJsonSerializer(new TypeNameSerializer()))))
             {

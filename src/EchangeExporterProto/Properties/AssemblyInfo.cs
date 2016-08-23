@@ -5,10 +5,8 @@ using System.Reflection;
 [assembly: AssemblyProductAttribute("ExchangeExporterProto")]
 [assembly: AssemblyDescriptionAttribute("Export exchange accounts including appointments and contacts")]
 [assembly: AssemblyVersionAttribute("1.0")]
+[assembly: AssemblyCompanyAttribute("linagora")]
 [assembly: AssemblyFileVersionAttribute("1.0")]
-[assembly: AssemblyCopyright("Linagora (c) 2016")]
-[assembly: AssemblyCompany("Linagora")]
-
 namespace System {
     internal static class AssemblyVersionInformation {
         internal const string Version = "1.0";
