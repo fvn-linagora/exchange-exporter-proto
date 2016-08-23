@@ -156,6 +156,14 @@ GITHUB
   remote: fsharp/FAKE
     modules/Octokit/Octokit.fsx (487d6a0dcf0f4b5450c9ce4cefa0a02b478166d9)
       Octokit (>= 0.20)
+GROUP IServiceBus
+FRAMEWORK: >= NET452
+NUGET
+  remote: http://api.nuget.org/v3/index.json
+    System.Reactive.Core (3.0)
+      System.Reactive.Interfaces (>= 3.0)
+    System.Reactive.Interfaces (3.0)
+
 GROUP Test
 NUGET
   remote: https://www.nuget.org/api/v2

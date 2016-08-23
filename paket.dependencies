@@ -27,3 +27,10 @@ group Test
   nuget NFluent
   nuget NUnit ~> 2
   nuget NUnit.Runners ~> 2
+
+group IServiceBus
+  source https://api.nuget.org/v3/index.json
+  framework >= net452
+
+  nuget System.Reactive.Core ~> 3
+  nuget System.Reactive.Interfaces ~> 3

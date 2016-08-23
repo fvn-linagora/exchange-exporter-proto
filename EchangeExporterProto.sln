@@ -18,6 +18,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CsvTargetAccountsProvider",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExchangeExporter.Tests", "tests\ExchangeExporter.Tests\ExchangeExporter.Tests.csproj", "{04AC27B5-721B-44D6-A311-50B7F38BCAF5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ServiceBus.Interfaces", "src\ServiceBus.Interfaces\ServiceBus.Interfaces.csproj", "{DA6FD6C1-FAC3-410E-9D5D-676A584B1712}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -44,6 +46,10 @@ Global
 		{04AC27B5-721B-44D6-A311-50B7F38BCAF5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{04AC27B5-721B-44D6-A311-50B7F38BCAF5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{04AC27B5-721B-44D6-A311-50B7F38BCAF5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DA6FD6C1-FAC3-410E-9D5D-676A584B1712}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DA6FD6C1-FAC3-410E-9D5D-676A584B1712}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DA6FD6C1-FAC3-410E-9D5D-676A584B1712}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DA6FD6C1-FAC3-410E-9D5D-676A584B1712}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

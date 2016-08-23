@@ -1,0 +1,6 @@
+FRAMEWORK: >= NET452
+NUGET
+  remote: http://api.nuget.org/v3/index.json
+    System.Reactive.Core (3.0)
+      System.Reactive.Interfaces (>= 3.0)
+    System.Reactive.Interfaces (3.0)
