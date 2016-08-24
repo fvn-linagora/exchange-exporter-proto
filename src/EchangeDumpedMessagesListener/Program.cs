@@ -100,6 +100,7 @@ namespace EchangeDumpedMessagesListener
         private static IICalendar ReccuringOccurenceAttendeesAppender(IICalendar calendar, Messages.Appointment reccuringAppointment)
         {
             var updatedCalendar = calendar.Copy<IICalendar>();
+            updatedCalendar.Events.Clear(); // All but events
 
             var exceptionsAttendeesOrderedByDate = reccuringAppointment.ModifiedOccurrences
                 .Select(occ => new {
