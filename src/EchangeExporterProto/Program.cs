@@ -401,10 +401,14 @@ namespace EchangeExporterProto
             var reccurenceExceptionIds = appointment.ModifiedOccurrences.Select(occ => occ.ItemId);
             var reccurenceExceptionsAttendees = reccurenceExceptionIds
                 .Select(id => EWSAppointment.Bind(service, id, new PropertySet( 
+                    // TODO: Include Resources collection property
                     BasePropertySet.IdOnly, AppointmentSchema.RequiredAttendees, AppointmentSchema.OptionalAttendees)))
                 .ToDictionary( k => ConvertIdFrom(k.Id), v => v );
 
             var dtoAppointment = Convert(appointment);
+
+            // TODO: Consider adding OptionalAttendees and Resources as well in the dumped appointment DTO :)
+            // TODO: include per attendee's iCal RSVP, found globally in appointment.IsResponseRequested property
 
             foreach (var occurence in dtoAppointment.ModifiedOccurrences)
             {

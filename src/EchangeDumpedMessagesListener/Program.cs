@@ -10,6 +10,7 @@ using EasyNetQ;
 
 using Messages;
 using ICalendarTransformersRegistry = System.Collections.Generic.IDictionary<Messages.AppointmentType, System.Func<DDay.iCal.IICalendar, Messages.Appointment, DDay.iCal.IICalendar>>;
+using EventDateMapper = System.Func<DDay.iCal.IEvent, System.DateTimeOffset>;
 
 namespace EchangeDumpedMessagesListener
 {
@@ -35,7 +36,7 @@ namespace EchangeDumpedMessagesListener
         {
             return new Dictionary<AppointmentType, Func<IICalendar, Messages.Appointment, IICalendar>>() {
                 {AppointmentType.Single, SingleEventAttendeesAppender},
-                {AppointmentType.RecurringMaster, ReccuringOccurenceAttendeesAppender},
+                {AppointmentType.RecurringMaster, ReccuringOccurenceHandler},
                 {AppointmentType.Exception, (cal, _) => cal },
                 {AppointmentType.Occurrence, (cal, _) => cal },
             };
@@ -97,8 +98,21 @@ namespace EchangeDumpedMessagesListener
             return eventWithAttendees;
         }
 
-        private static IICalendar ReccuringOccurenceAttendeesAppender(IICalendar calendar, Messages.Appointment reccuringAppointment)
+        private static IICalendar ReccuringOccurenceHandler(IICalendar calendar, Messages.Appointment reccuringAppointment)
         {
+            var calendarWithAttendees = AppendMissingAttendeesToReccuringOccurence(calendar, reccuringAppointment);
+            var calendarWithAttendeesAndFixedRecurrenceIds = FixReccuringExceptionsReccurenceId(calendarWithAttendees, reccuringAppointment);
+
+            return calendarWithAttendeesAndFixedRecurrenceIds;
+        }
+
+        private static IICalendar AppendMissingAttendeesToReccuringOccurence(IICalendar calendar, Messages.Appointment reccuringAppointment)
+        {
+            if (reccuringAppointment == null)
+                return calendar;
+            if (reccuringAppointment.ModifiedOccurrences == null)
+                return calendar;
+
             var updatedCalendar = calendar.Copy<IICalendar>();
             updatedCalendar.Events.Clear(); // All but events
 
@@ -112,8 +126,8 @@ namespace EchangeDumpedMessagesListener
             var exceptionEventsWithAttendees = calendar.Events
                 .Where(ev => ev.RecurrenceID != null)
                 .OrderBy(ev => ev.Start.ToString("o"))
-                .Zip(exceptionsAttendeesOrderedByDate, (vev, att) => new { 
-                    Event = vev.Copy<Event>(),
+                .Zip(exceptionsAttendeesOrderedByDate, (vev, att) => new {
+                    Event = vev,
                     Attendees = att.Attendees.MapToICalAttendees(),
                 });
 
@@ -131,6 +145,58 @@ namespace EchangeDumpedMessagesListener
             updatedCalendar.Events.Add(updatedMasterEventWithAttendees);
 
             return updatedCalendar;
+        }
+
+        private static IICalendar FixReccuringExceptionsReccurenceId(IICalendar calendar, Appointment reccuringAppointment)
+        {
+            if (reccuringAppointment == null || reccuringAppointment.ModifiedOccurrences == null)
+                return calendar;
+
+            var updatedCalendar = calendar.Copy<IICalendar>();
+            updatedCalendar.Events.Clear(); // All but events
+
+            var calendarEvents = calendar.Events.ToList();
+            var fixReccurrenceId = BuildEventRecurrenceIdFixer(reccuringAppointment, calendarEvents);
+
+            calendarEvents
+                .Select(fixReccurrenceId)
+                .ToList()
+                .ForEach(updatedCalendar.Events.Add);
+
+            return updatedCalendar;
+        }
+
+        private static Func<DDay.iCal.IEvent, Event> BuildEventRecurrenceIdFixer(Appointment reccuringAppointment, List<DDay.iCal.IEvent> calendarEvents)
+        {
+            var mapOfModifiedOccurrences = BuildMapOfStartDateToReccurrenceException(calendarEvents, reccuringAppointment.ModifiedOccurrences);
+            EventDateMapper originalStartDateMapper = ev => DateTimeOffset.Parse(mapOfModifiedOccurrences[ev.Start].OriginalStart);
+            Func<DDay.iCal.IEvent, Event> fixReccurrenceId = ev => FixEventReccuringId(originalStartDateMapper, ev);
+            return fixReccurrenceId;
+        }
+
+        private static IDictionary<IDateTime, ModifiedOccurrence> BuildMapOfStartDateToReccurrenceException(
+            IEnumerable<DDay.iCal.IEvent> events, ICollection<ModifiedOccurrence> modifiedOccurrences)
+        {
+            var eventsJoin =
+                from e in events
+                join occ in modifiedOccurrences
+                    on e.Start.UTC equals DateTime.Parse(occ.Start).ToUniversalTime()
+                where e.RecurrenceID != null
+                select new { Start = e.Start, Exception = occ };
+
+            return eventsJoin.ToDictionary(k => k.Start, v => v.Exception);
+        }
+
+        private static Event FixEventReccuringId(EventDateMapper originalStartDateProvider, DDay.iCal.IEvent ev)
+        {
+            if (ev.RecurrenceID == null && ev is Event)
+                return ev as Event; // reccurence master
+            var updatedEvent = ev.Copy<Event>();
+            var eventOriginalStartUtcDate = originalStartDateProvider(ev).ToUniversalTime();
+            var originalUtcDateICal = new iCalDateTime(eventOriginalStartUtcDate.DateTime) { IsUniversalTime = true };
+            updatedEvent.RecurrenceID = originalUtcDateICal;
+
+            return updatedEvent;
         }
 
         private static bool IsAttendeesAddressSet(Messages.Attendee a)
