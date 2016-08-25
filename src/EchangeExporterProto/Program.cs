@@ -98,7 +98,7 @@ namespace EchangeExporterProto
             return default(Options);
         }
 
-    private static string GetConfigPath(Options arguments)
+        private static string GetConfigPath(Options arguments)
         {
             string configPath =
                 // First check args
@@ -217,12 +217,13 @@ namespace EchangeExporterProto
 
             foreach(var box in mailboxes)
             {
-                Console.WriteLine("Dumping CONTACTs for account: {0} ...", box.PrimarySmtpAddress);
+                Console.WriteLine("Dumping Addressbooks for account: {0} ...", box.PrimarySmtpAddress);
                 ImpersonateQueries(service, box.PrimarySmtpAddress);
 
                 var rootFolder = Folder.Bind(service, WellKnownFolderName.MsgFolderRoot);
 
-                var addressBooks = rootFolder.FindFolders(searchFilter, folderView);
+                var addressBooks = rootFolder.FindFolders(searchFilter, folderView).Cast<ContactsFolder>().ToList();
+
                 var addressBookMessages = addressBooks
                     .Select(book => new NewAddressBook
                     {
@@ -234,10 +235,45 @@ namespace EchangeExporterProto
                     })
                     .ToList();
                 addressBookMessages.ForEach(book => Console.WriteLine("Mailbox: {2}, Book #{0} , DisplayName: {1}", book.Id, book.DisplayName, book.PrimaryEmailAddress));
-
                 PublishToBus(addressBookMessages, queueConf);
+
+                IEnumerable<NewMimeContactExported> contactMessages = DumpAddressBookContacts(service, box.PrimarySmtpAddress, addressBooks.Cast<ContactsFolder>());
+                PublishToBus(contactMessages, queueConf);
             }
 
+        }
+
+        private static IEnumerable<NewMimeContactExported> DumpAddressBookContacts(ExchangeService service, String primaryAddress, IEnumerable<ContactsFolder> addressBooks)
+        {
+            var includingOnlyIdAndName = new ItemView(int.MaxValue) { PropertySet = new PropertySet(BasePropertySet.IdOnly, ContactSchema.DisplayName) };
+            var includingMimeAndLastUpdated = new PropertySet(BasePropertySet.IdOnly, ItemSchema.MimeContent, ContactSchema.DisplayName, ItemSchema.LastModifiedTime);
+            var allBookIdsWithContactIds = addressBooks
+                .Select(book => new {
+                    BookId = book.Id.UniqueId,
+                    ContactIds = book.FindItems(includingOnlyIdAndName).Select(x => x.Id),
+                })
+                .Where(x => x.ContactIds.Any());
+
+            var allContactsInfo = allBookIdsWithContactIds
+                .SelectMany(x => service.BindToItems(x.ContactIds, includingMimeAndLastUpdated)
+                    .Select(resp => new { x.BookId, Response = resp }))
+                .Where(x => x.Response.Result == ServiceResult.Success)
+                .Select(x => new {
+                    AddressBookId = x.BookId,
+                    Contact = x.Response.Item as Contact
+                });
+
+            Func<MimeContent, string> mimeToString = mime => Encoding.GetEncoding(mime.CharacterSet).GetString(mime.Content);
+
+            return allContactsInfo
+                .Select(ctx => new NewMimeContactExported {
+                    Id = Guid.NewGuid(),
+                    CreationDate = DateTimeOffset.UtcNow,
+                    OriginalContactId = ctx.Contact.Id.UniqueId,
+                    AddressBookId = ctx.AddressBookId,
+                    PrimaryAddress = primaryAddress,
+                    MimeContent = mimeToString(ctx.Contact.MimeContent),
+                });
         }
 
         private static void ExportAndPublishAppointments(MessageQueue queueConf, ExchangeService service, IEnumerable<MailAccount> mailboxes)
@@ -282,11 +318,6 @@ namespace EchangeExporterProto
             };
         }
 
-        private static string DumpAvailablePropsToJson(EWSAppointment ev)
-        {
-            return JsonConvert.SerializeObject(ev, Formatting.Indented, serializerSettings);
-        }
-
         private static IEnumerable<NewAppointmentDumped> FindAllMeetings(ExchangeService service, String primaryEmailAddress)
         {
             PropertySet includeMostProps = BuildAppointmentPropertySet();
@@ -314,7 +345,7 @@ namespace EchangeExporterProto
                     Mailbox = appCtx.Mailbox,
                     FolderId = appCtx.Folder.UniqueId,
                     Id = appCtx.Appointment.Id.ToString(),
-                    Appointment = AddMissingModifiedOccurencesAttendees(service, appCtx.Appointment),
+                    Appointment = AddMissingAttendeesInfo(service, appCtx.Appointment),
                     SourceAsJson = JsonConvert.SerializeObject(appCtx.Appointment, Formatting.Indented, serializerSettings),
                     MimeContent = Encoding.GetEncoding(appCtx.Appointment.MimeContent.CharacterSet).GetString(appCtx.Appointment.MimeContent.Content)
                 });
@@ -333,21 +364,14 @@ namespace EchangeExporterProto
             return result;
         }
 
-        private static SearchFilter SkipAppointmentsOfType(EWSAppointmentType typeToSkip)
-        {
-            // filters on AppointmentSchema.AppointmentType throw at runtime "The property can not be used with this type of restriction."
-            List<SearchFilter> searchFilterCollection = new List<SearchFilter>();
-            searchFilterCollection.Add(new SearchFilter.IsEqualTo(AppointmentSchema.AppointmentType, typeToSkip));
-            SearchFilter searchFilter = new SearchFilter.SearchFilterCollection(LogicalOperator.And, searchFilterCollection);
-            return searchFilter;
-        }
-
         private static IEnumerable<CalendarFolder> GetAllCalendars(ExchangeService service)
         {
             int folderViewSize = int.MaxValue; // Kids, dont do this at home !
-            FolderView view = new FolderView(folderViewSize);
-            view.PropertySet = new PropertySet(BasePropertySet.IdOnly, FolderSchema.DisplayName, FolderSchema.FolderClass);
-            view.Traversal = FolderTraversal.Deep;
+            var view = new FolderView(folderViewSize)
+            {
+                PropertySet = new PropertySet(BasePropertySet.IdOnly, FolderSchema.DisplayName, FolderSchema.FolderClass),
+                Traversal = FolderTraversal.Deep
+            };
             FindFoldersResults findFolderResults = service.FindFolders(WellKnownFolderName.MsgFolderRoot, view);
 
             return findFolderResults.OfType<CalendarFolder>();
@@ -391,23 +415,24 @@ namespace EchangeExporterProto
             return JsonConvert.DeserializeObject<Messages.Appointment>(serializedPayload);
         }
 
-        private static Messages.Appointment AddMissingModifiedOccurencesAttendees(ExchangeService service, EWSAppointment appointment)
+        private static Messages.Appointment AddMissingAttendeesInfo(ExchangeService service, EWSAppointment appointment)
         {
             if (appointment.AppointmentType != EWSAppointmentType.RecurringMaster)
                 return Convert(appointment);
             if (appointment.ModifiedOccurrences == null)
                 return Convert(appointment);
 
+            // appointment is of type RecurringMaster from here
             var reccurenceExceptionIds = appointment.ModifiedOccurrences.Select(occ => occ.ItemId);
             var reccurenceExceptionsAttendees = reccurenceExceptionIds
                 .Select(id => EWSAppointment.Bind(service, id, new PropertySet( 
-                    // TODO: Include Resources collection property
-                    BasePropertySet.IdOnly, AppointmentSchema.RequiredAttendees, AppointmentSchema.OptionalAttendees)))
+                    BasePropertySet.IdOnly, AppointmentSchema.RequiredAttendees,
+                    AppointmentSchema.OptionalAttendees,
+                    AppointmentSchema.Resources)))
                 .ToDictionary( k => ConvertIdFrom(k.Id), v => v );
 
             var dtoAppointment = Convert(appointment);
 
-            // TODO: Consider adding OptionalAttendees and Resources as well in the dumped appointment DTO :)
             // TODO: include per attendee's iCal RSVP, found globally in appointment.IsResponseRequested property
 
             foreach (var occurence in dtoAppointment.ModifiedOccurrences)
@@ -441,34 +466,6 @@ namespace EchangeExporterProto
                 uniqueId = id.UniqueId,
                 changeKey = id.ChangeKey
             };
-        }
-
-        private static Messages.Appointment AddMissingAttendees(EWSAppointment appointment, Dictionary<Messages.ItemId, EWSAppointment> reccurenceExceptionsIndex)
-        {
-            var serializedPayload = JsonConvert.SerializeObject(appointment, Formatting.Indented, serializerSettings);
-            var dtoAppointment = JsonConvert.DeserializeObject<Messages.Appointment>(serializedPayload);
-
-            if (appointment.AppointmentType == EWSAppointmentType.RecurringMaster)
-            {
-                foreach (var occurence in dtoAppointment.ModifiedOccurrences)
-                {
-                    if (reccurenceExceptionsIndex.ContainsKey(occurence.ItemId))
-                    {
-                        var exceptionAppointmentInfo = reccurenceExceptionsIndex[occurence.ItemId];
-                        // NOTE: ignoring optional attendees for now
-                        occurence.Attendees = exceptionAppointmentInfo.RequiredAttendees
-                            .Select(att => new Messages.RequiredAttendee {
-                                Address = att.Address,
-                                Name = att.Name,
-                                MailboxType = (int?)att.MailboxType,
-                                ResponseType = (int?)att.ResponseType,
-                                RoutingType = att.RoutingType,
-                            })
-                            .ToList<Messages.Attendee>();
-                    }
-                }
-            }
-            return dtoAppointment;
         }
 
         private static ExchangeService ConnectToExchange(ExchangeServer exchange, Credentials credentials) {

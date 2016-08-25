@@ -42,4 +42,15 @@
         public string AddressBookId { get; set; }
         public string DisplayName { get; set; }
     }
+
+
+    public class NewMimeContactExported : IEvent
+    {
+        public Guid Id { get; set; }
+        public DateTimeOffset CreationDate { get; set; }
+        public string OriginalContactId { get; set; }
+        public string PrimaryAddress { get; set; }
+        public string AddressBookId { get; set; }
+        public string MimeContent { get; set; }
+    }
 }
