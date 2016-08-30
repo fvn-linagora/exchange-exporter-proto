@@ -19,6 +19,14 @@ using CsvTargetAccountsProvider;
 
 namespace EchangeExporterProto
 {
+    enum Features
+    {
+        Event,
+        AddressBook,
+        Attachment,
+        Contact
+    }
+
     class Options
     {
         // [Option('t', "targets", Required = true,
@@ -29,6 +37,9 @@ namespace EchangeExporterProto
         [Option('c', "config",
            HelpText = "Configuration file path.")]
         public string ConfigPath { get; set; }
+
+        [Option('s', "skip-steps", HelpText = "Steps to be skipped (events, addressbooks, attachments, contacts).")]
+        public IEnumerable<Features> SkippedSteps { get; set; }
 
         [Option(
           HelpText = "Prints all messages to standard output.")]
@@ -44,6 +55,7 @@ namespace EchangeExporterProto
         private static MailboxAccountsProvider accountsProvider = new MailboxAccountsProvider(',');
         private static readonly string ACCOUNTSFILE = "targets.csv";
         private static ICollection<EWSAppointmentType> singleAndRecurringMasterAppointmentTypes = new List<EWSAppointmentType> { EWSAppointmentType.RecurringMaster, EWSAppointmentType.Single };
+        private static ISet<Features> skippedSteps = new HashSet<Features>();
 
         private static readonly ILog log = new ConsoleLogger();
 
@@ -60,7 +72,10 @@ namespace EchangeExporterProto
             var arguments = result.MapResult( options => options, ArgumentErrorHandler);
 
             config = new Configuration(configPath: GetConfigPath(arguments)).LoadSection<ExporterConfiguration>(EXPORTER_CONFIG_SECTION);
-            var mailboxes = GetTargetAccounts(arguments).ToList();
+            var mailboxes = GetTargetAccounts(arguments)
+                .Where(box => !string.IsNullOrWhiteSpace(box.PrimarySmtpAddress))
+                .ToList();
+            skippedSteps = new HashSet<Features>(arguments.SkippedSteps);
 
             if (String.IsNullOrWhiteSpace(config.MessageQueue.ConnectionString) && String.IsNullOrWhiteSpace(config.MessageQueue.Host))
             {
@@ -84,12 +99,18 @@ namespace EchangeExporterProto
 
             ExchangeService service = ConnectToExchange(config.ExchangeServer, config.Credentials);
 
-            ExportAndPublishAppointments(queueConf, service, mailboxes);
-            ExportAndPublishAddressBooks(queueConf, service, mailboxes);
-            var attachedMessages = ExportAppointmentsAttachedFiles(service, mailboxes).Select(MapToAttachmentMessage);
-            PublishToBus(attachedMessages, queueConf);
+            if (!skippedSteps.Contains(Features.Event))
+                ExportAndPublishAppointments(queueConf, service, mailboxes);
+            if (!(skippedSteps.Contains(Features.AddressBook) && skippedSteps.Contains(Features.Contact)))
+                ExportAndPublishAddressBooks(queueConf, service, mailboxes);
 
-            Console.ReadLine();
+            if (!skippedSteps.Contains(Features.Attachment))
+            {
+                var attachedMessages = ExportAppointmentsAttachedFiles(service, mailboxes).Select(MapToAttachmentMessage);
+                PublishToBus(attachedMessages, queueConf);
+            }
+
+            Console.WriteLine("DONE: Exporter has completed exchange mailboxes data dump.");
         }
 
         private static Options ArgumentErrorHandler(IEnumerable<Error> errors) {
@@ -215,32 +236,43 @@ namespace EchangeExporterProto
             };
             SearchFilter searchFilter = new SearchFilter.IsEqualTo(FolderSchema.FolderClass, "IPF.Contact");
 
-            foreach(var box in mailboxes)
+            foreach (var box in mailboxes)
             {
-                Console.WriteLine("Dumping Addressbooks for account: {0} ...", box.PrimarySmtpAddress);
-                ImpersonateQueries(service, box.PrimarySmtpAddress);
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(box.PrimarySmtpAddress)) continue;
 
-                var rootFolder = Folder.Bind(service, WellKnownFolderName.MsgFolderRoot);
+                    Console.WriteLine("Dumping Addressbooks for account: {0} ...", box.PrimarySmtpAddress);
+                    ImpersonateQueries(service, box.PrimarySmtpAddress);
 
-                var addressBooks = rootFolder.FindFolders(searchFilter, folderView).Cast<ContactsFolder>().ToList();
+                    var rootFolder = Folder.Bind(service, WellKnownFolderName.MsgFolderRoot);
 
-                var addressBookMessages = addressBooks
-                    .Select(book => new NewAddressBook
+                    var addressBooks = rootFolder.FindFolders(searchFilter, folderView).Cast<ContactsFolder>().ToList();
+
+                    var addressBookMessages = addressBooks
+                        .Select(book => new NewAddressBook
+                        {
+                            Id = Guid.NewGuid(),
+                            CreationDate = DateTime.UtcNow,
+                            PrimaryEmailAddress = box.PrimarySmtpAddress,
+                            AddressBookId = book.Id.UniqueId,
+                            DisplayName = book.DisplayName,
+                        })
+                        .ToList();
+                    addressBookMessages.ForEach(book => Console.WriteLine("Mailbox: {2}, Book #{0} , DisplayName: {1}", book.Id, book.DisplayName, book.PrimaryEmailAddress));
+                    PublishToBus(addressBookMessages, queueConf);
+
+                    if (!skippedSteps.Contains(Features.Contact))
                     {
-                        Id = Guid.NewGuid(),
-                        CreationDate = DateTime.UtcNow,
-                        PrimaryEmailAddress = box.PrimarySmtpAddress,
-                        AddressBookId = book.Id.UniqueId,
-                        DisplayName = book.DisplayName,
-                    })
-                    .ToList();
-                addressBookMessages.ForEach(book => Console.WriteLine("Mailbox: {2}, Book #{0} , DisplayName: {1}", book.Id, book.DisplayName, book.PrimaryEmailAddress));
-                PublishToBus(addressBookMessages, queueConf);
-
-                IEnumerable<NewMimeContactExported> contactMessages = DumpAddressBookContacts(service, box.PrimarySmtpAddress, addressBooks.Cast<ContactsFolder>());
-                PublishToBus(contactMessages, queueConf);
+                        IEnumerable<NewMimeContactExported> contactMessages = DumpAddressBookContacts(service, box.PrimarySmtpAddress, addressBooks.Cast<ContactsFolder>());
+                        PublishToBus(contactMessages, queueConf);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log.Error($"An error occured for mailbox {box.PrimarySmtpAddress}, message: {ex.Message}, stack: {ex.StackTrace}");
+                }
             }
-
         }
 
         private static IEnumerable<NewMimeContactExported> DumpAddressBookContacts(ExchangeService service, String primaryAddress, IEnumerable<ContactsFolder> addressBooks)
@@ -257,23 +289,65 @@ namespace EchangeExporterProto
             var allContactsInfo = allBookIdsWithContactIds
                 .SelectMany(x => service.BindToItems(x.ContactIds, includingMimeAndLastUpdated)
                     .Select(resp => new { x.BookId, Response = resp }))
-                .Where(x => x.Response.Result == ServiceResult.Success)
-                .Select(x => new {
+                .Where(x => AddressBookItemResponseIsSingleContact(x.Response)) // skip Distribution Lists
+                .Select(x => new ContactContext {
+                    PrimaryAddress = primaryAddress,
                     AddressBookId = x.BookId,
                     Contact = x.Response.Item as Contact
                 });
 
+            Func<Contact, DateTime> getLastModifiedUtc = contact => TimeZoneInfo.ConvertTimeToUtc(contact.LastModifiedTime, service.TimeZone);
             Func<MimeContent, string> mimeToString = mime => Encoding.GetEncoding(mime.CharacterSet).GetString(mime.Content);
+            Func<ContactContext, NewMimeContactExported> createExportedContactMessage = contactContext => CreateExportedContactMessage(getLastModifiedUtc, mimeToString, contactContext);
 
             return allContactsInfo
-                .Select(ctx => new NewMimeContactExported {
-                    Id = Guid.NewGuid(),
-                    CreationDate = DateTimeOffset.UtcNow,
-                    OriginalContactId = ctx.Contact.Id.UniqueId,
-                    AddressBookId = ctx.AddressBookId,
-                    PrimaryAddress = primaryAddress,
-                    MimeContent = mimeToString(ctx.Contact.MimeContent),
-                });
+                .Select(createExportedContactMessage);
+        }
+
+        private static bool AddressBookItemResponseIsSingleContact(GetItemResponse contactResponse)
+        {
+            return contactResponse.Result == ServiceResult.Success
+                    && contactResponse.Item is Contact
+                    && (contactResponse.Item as Contact) != null;
+        }
+
+        class ContactContext
+        {
+            public string PrimaryAddress { get; set; }
+            public string AddressBookId { get; set; }
+            public Contact Contact { get; set; }
+        }
+
+        private static NewMimeContactExported CreateExportedContactMessage(Func<Contact, DateTime> getLastModifiedUtc, Func<MimeContent, string> mimeToString, ContactContext ctx)
+        {
+            if (mimeToString == null)
+                throw new ArgumentNullException(nameof(mimeToString));
+            if (getLastModifiedUtc == null)
+                throw new ArgumentNullException(nameof(getLastModifiedUtc));
+            if (ctx == null)
+                throw new ArgumentNullException(nameof(ctx));
+            if (ctx.Contact == null)
+                throw new ArgumentNullException(nameof(ctx.Contact));
+            if (string.IsNullOrWhiteSpace(ctx.PrimaryAddress))
+                throw new ArgumentNullException(nameof(ctx.PrimaryAddress));
+            if (ctx.AddressBookId == null)
+                throw new ArgumentNullException(nameof(ctx.AddressBookId));
+            if (ctx.Contact.MimeContent == null)
+                throw new ArgumentNullException(nameof(ctx.Contact.MimeContent));
+            if (ctx.Contact.Id == null || ctx.Contact.Id.UniqueId == null || ctx.Contact.Id.ChangeKey == null)
+                throw new ArgumentNullException(nameof(ctx.Contact.Id));
+
+            log.Info($"exporting contact '{ctx.Contact.DisplayName ?? string.Empty}' from mailbox: '{ctx.PrimaryAddress}'\n");
+
+            return new NewMimeContactExported
+            {
+                Id = Guid.NewGuid(),
+                CreationDate = DateTimeOffset.UtcNow,
+                OriginalContactId = ctx.Contact.Id.UniqueId,
+                AddressBookId = ctx.AddressBookId,
+                PrimaryAddress = ctx.PrimaryAddress,
+                MimeContent = mimeToString(ctx.Contact.MimeContent),
+            };
         }
 
         private static void ExportAndPublishAppointments(MessageQueue queueConf, ExchangeService service, IEnumerable<MailAccount> mailboxes)
@@ -283,6 +357,7 @@ namespace EchangeExporterProto
             {
                 foreach (var mailbox in mailboxes)
                 {
+                    if (string.IsNullOrWhiteSpace(mailbox.PrimarySmtpAddress)) continue;
                     Console.WriteLine("Dumping calendar items for account: {0} ...", mailbox.PrimarySmtpAddress);
                     ImpersonateQueries(service, mailbox.PrimarySmtpAddress);
 
@@ -385,6 +460,7 @@ namespace EchangeExporterProto
                             ItemSchema.Body,
                             AppointmentSchema.RequiredAttendees, 
                             AppointmentSchema.OptionalAttendees,
+                            AppointmentSchema.Resources,
                             ItemSchema.Categories,
                             ItemSchema.Culture,
                             ItemSchema.DateTimeCreated,
@@ -397,13 +473,12 @@ namespace EchangeExporterProto
                             AppointmentSchema.Start,
                             AppointmentSchema.StartTimeZone,
                             ItemSchema.Subject,
-                // AppointmentSchema.TextBody, // EWS 2013 only
                             AppointmentSchema.TimeZone,
                             ItemSchema.MimeContent,
                             AppointmentSchema.ModifiedOccurrences,
                             AppointmentSchema.DeletedOccurrences,
-                            AppointmentSchema.IsRecurring, 
                             AppointmentSchema.AppointmentType,
+                            AppointmentSchema.IsResponseRequested,
                             AppointmentSchema.When
                         );
         }
@@ -441,21 +516,56 @@ namespace EchangeExporterProto
                 {
                     var exceptionAppointmentInfo = reccurenceExceptionsAttendees[occurence.ItemId];
                     // NOTE: ignoring optional attendees for now
-                    occurence.Attendees = exceptionAppointmentInfo.RequiredAttendees
-                        .Select(MapRequiredAttendees)
-                        .ToList<Messages.Attendee>();
+
+                    var required = exceptionAppointmentInfo.RequiredAttendees
+                        .Select(MapToRequiredAttendees);
+                    var optional = exceptionAppointmentInfo.OptionalAttendees
+                        .Select(MapToOptionalAttendees);
+                    var resources = exceptionAppointmentInfo.OptionalAttendees
+                        .Select(MapToResources);
+
+                    var allInvitedAttendees = required.Cast<InvitedAttendee>()
+                        .Union(optional.Cast<InvitedAttendee>())
+                        .Union(resources.Cast<InvitedAttendee>());
+
+                    occurence.Attendees = allInvitedAttendees.Cast<Messages.Attendee>().ToList();
                 }
             }
             return dtoAppointment;
         }
 
-        private static RequiredAttendee MapRequiredAttendees(Microsoft.Exchange.WebServices.Data.Attendee att)
+        private static RequiredAttendee MapToRequiredAttendees(Microsoft.Exchange.WebServices.Data.Attendee att)
         {
-            return new Messages.RequiredAttendee {
+            return new RequiredAttendee
+            {
                 Address = att.Address,
                 Name = att.Name,
-                MailboxType = (int?)att.MailboxType,
-                ResponseType = (int?)att.ResponseType,
+                MailboxType = (Messages.MailboxType)(int?)att.MailboxType,
+                ResponseType = (Messages.MeetingResponseType)(int?)att.ResponseType,
+                RoutingType = att.RoutingType,
+            };
+        }
+
+        private static OptionalAttendee MapToOptionalAttendees(Microsoft.Exchange.WebServices.Data.Attendee att)
+        {
+            return new OptionalAttendee
+            {
+                Address = att.Address,
+                Name = att.Name,
+                MailboxType = (Messages.MailboxType)(int?)att.MailboxType,
+                ResponseType = (Messages.MeetingResponseType)(int?)att.ResponseType,
+                RoutingType = att.RoutingType,
+            };
+        }
+
+        private static Resource MapToResources(Microsoft.Exchange.WebServices.Data.Attendee att)
+        {
+            return new Resource
+            {
+                Address = att.Address,
+                Name = att.Name,
+                MailboxType = (Messages.MailboxType)(int?)att.MailboxType,
+                ResponseType = (Messages.MeetingResponseType)(int?)att.ResponseType,
                 RoutingType = att.RoutingType,
             };
         }

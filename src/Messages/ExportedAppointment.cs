@@ -3,25 +3,45 @@ using System.Collections.Generic;
 
 namespace Messages
 {
-    public class Attendee
+    public abstract class Attendee
     {
         public string Name { get; set; }
         public string Address { get; set; }
         public string RoutingType { get; set; }
-        public int? MailboxType { get; set; }
+        public MailboxType? MailboxType { get; set; }
+    }
+    public enum MeetingResponseType
+    {
+        Unknown,
+        Organizer,
+        Tentative,
+        Accept,
+        Decline,
+        NoResponseReceived
+    }
+    public enum MailboxType
+    {
+        Unknown,
+        OneOff,
+        Mailbox,
+        PublicFolder,
+        PublicGroup,
+        ContactGroup,
+        Contact
     }
 
     public class Organizer : Attendee {}
 
-    public class RequiredAttendee : Attendee
+    public abstract class InvitedAttendee : Attendee
     {
-        public int? ResponseType { get; set; }
+        public MeetingResponseType? ResponseType { get; set; }
     }
 
-    public class OptionalAttendee : Attendee
-    {
-        public int? ResponseType { get; set; }
-    }
+    public class RequiredAttendee : InvitedAttendee { }
+
+    public class OptionalAttendee : InvitedAttendee { }
+
+    public class Resource : InvitedAttendee { }
 
     public class Recurrence
     {
@@ -137,8 +157,8 @@ namespace Messages
         public int MyResponseType { get; set; }
         public Organizer Organizer { get; set; }
         public List<RequiredAttendee> RequiredAttendees { get; set; }
-        public List<OptionalAttendee > OptionalAttendees { get; set; }
-        // public List<object> Resources { get; set; }
+        public List<OptionalAttendee> OptionalAttendees { get; set; }
+        public List<Resource> Resources { get; set; }
         public string Duration { get; set; }
         public string TimeZone { get; set; }
         public int AppointmentSequenceNumber { get; set; }
@@ -179,15 +199,15 @@ namespace Messages
         public string DisplayTo { get; set; }
         public bool HasAttachments { get; set; }
         public Body Body { get; set; }
-        public string ItemClass { get; set; }
+        //public string ItemClass { get; set; }
         public string Subject { get; set; }
-        public string WebClientReadFormQueryString { get; set; }
-        public string WebClientEditFormQueryString { get; set; }
+        //public string WebClientReadFormQueryString { get; set; }
+        //public string WebClientEditFormQueryString { get; set; }
         // public List<object> ExtendedProperties { get; set; }
-        public int EffectiveRights { get; set; }
+        //public int EffectiveRights { get; set; }
         public string LastModifiedName { get; set; }
         public string LastModifiedTime { get; set; }
         public ConversationId ConversationId { get; set; }
-        public bool IsDirty { get; set; }
+        //public bool IsDirty { get; set; }
     }
 }
