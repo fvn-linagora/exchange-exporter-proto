@@ -343,6 +343,8 @@ namespace EchangeExporterProto
             {
                 Id = Guid.NewGuid(),
                 CreationDate = DateTimeOffset.UtcNow,
+                OriginalChangeKey = ctx.Contact.Id.ChangeKey,
+                LastModified = getLastModifiedUtc(ctx.Contact),
                 OriginalContactId = ctx.Contact.Id.UniqueId,
                 AddressBookId = ctx.AddressBookId,
                 PrimaryAddress = ctx.PrimaryAddress,

@@ -52,5 +52,7 @@
         public string PrimaryAddress { get; set; }
         public string AddressBookId { get; set; }
         public string MimeContent { get; set; }
+        public string OriginalChangeKey { get; set; }
+        public DateTimeOffset LastModified { get; set; }
     }
 }
