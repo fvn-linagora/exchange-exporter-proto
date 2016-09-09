@@ -16,6 +16,7 @@ using CommandLine;
 
 using Messages;
 using CsvTargetAccountsProvider;
+using Appointment = Messages.Appointment;
 
 namespace EchangeExporterProto
 {
@@ -395,145 +396,196 @@ namespace EchangeExporterProto
             };
         }
 
-        private static IEnumerable<NewAppointmentDumped> FindAllMeetings(ExchangeService service, String primaryEmailAddress)
+        class TractableJsonSerializer
         {
-            PropertySet includeMostProps = BuildAppointmentPropertySet();
-
-            var findAllAppointments = new Func<ExchangeService, FolderId,IEnumerable<EWSAppointment>>(FindAllAppointments).Partial(service);
-
-            IQueryable<EWSAppointment> mailboxAppointments = GetAllCalendars(service)
-                // .Where(cal => cal.DisplayName == "SubCalendar1" || cal.DisplayName == "SecondRootCalendar")
-                .Select(calendar => calendar.Id)
-                .SelectMany(findAllAppointments)
-                .Cast<EWSAppointment>().AsQueryable();
-
-            var singleAndReccurringMasterAppointments = mailboxAppointments.Where(app => singleAndRecurringMasterAppointmentTypes.Contains(app.AppointmentType));
-
-            var singleAndReccurringMasterAppointmentsWithContext = singleAndReccurringMasterAppointments
-                .Select(app => EWSAppointment.Bind(service, app.Id, includeMostProps))
-                .Select(app => new {
-                    Mailbox = primaryEmailAddress,
-                    Folder = app.ParentFolderId,
-                    Appointment = app
-                });
-
-            var messagesForExportingSingleAndReccurenceAppointments = singleAndReccurringMasterAppointmentsWithContext
-                .Select(appCtx => new NewAppointmentDumped {
-                    Mailbox = appCtx.Mailbox,
-                    FolderId = appCtx.Folder.UniqueId,
-                    Id = appCtx.Appointment.Id.ToString(),
-                    Appointment = Convert(appCtx.Appointment),
-                    SourceAsJson = JsonConvert.SerializeObject(appCtx.Appointment, Formatting.Indented, serializerSettings),
-                    MimeContent = Encoding.GetEncoding(appCtx.Appointment.MimeContent.CharacterSet).GetString(appCtx.Appointment.MimeContent.Content)
-                });
-
-            return messagesForExportingSingleAndReccurenceAppointments;
-        }
-
-        private static IEnumerable<EWSAppointment> FindAllAppointments(ExchangeService service, FolderId calendarId)
-        {
-            var appIdsView = new ItemView(int.MaxValue) {
-                PropertySet = new PropertySet(BasePropertySet.IdOnly, AppointmentSchema.AppointmentType)
-            };
-
-            var result = PagedItemsSearch.PageSearchItems<EWSAppointment>(service, calendarId, 500, appIdsView.PropertySet, AppointmentSchema.DateTimeCreated);
-
-            return result;
-        }
-
-        private static IEnumerable<CalendarFolder> GetAllCalendars(ExchangeService service)
-        {
-            int folderViewSize = int.MaxValue; // Kids, dont do this at home !
-            var view = new FolderView(folderViewSize)
+            private static readonly JsonSerializerSettings serializerSettings = new JsonSerializerSettings
             {
-                PropertySet = new PropertySet(BasePropertySet.IdOnly, FolderSchema.DisplayName, FolderSchema.FolderClass),
-                Traversal = FolderTraversal.Deep
+                TypeNameHandling = TypeNameHandling.Auto,
+                NullValueHandling = NullValueHandling.Ignore,
+                ContractResolver = new SkipRequestInfoContractResolver("Schema", "Service", "MimeContent"),
+                Error = (serializer, err) => err.ErrorContext.Handled = true,
             };
-            FindFoldersResults findFolderResults = service.FindFolders(WellKnownFolderName.MsgFolderRoot, view);
 
-            return findFolderResults.OfType<CalendarFolder>();
-        }
-
-        private static PropertySet BuildAppointmentPropertySet()
-        {
-            return new PropertySet(
-                            BasePropertySet.FirstClassProperties,
-                            AppointmentSchema.AppointmentType,
-                            ItemSchema.Body,
-                            AppointmentSchema.RequiredAttendees, 
-                            AppointmentSchema.OptionalAttendees,
-                            AppointmentSchema.Resources,
-                            ItemSchema.Categories,
-                            ItemSchema.Culture,
-                            ItemSchema.DateTimeCreated,
-                            ItemSchema.DateTimeReceived,
-                            ItemSchema.DateTimeSent,
-                            ItemSchema.DisplayTo,
-                            ItemSchema.DisplayCc,
-                            AppointmentSchema.Duration,
-                            AppointmentSchema.End,
-                            AppointmentSchema.Start,
-                            AppointmentSchema.StartTimeZone,
-                            ItemSchema.Subject,
-                            AppointmentSchema.TimeZone,
-                            ItemSchema.MimeContent,
-                            AppointmentSchema.ModifiedOccurrences,
-                            AppointmentSchema.DeletedOccurrences,
-                            AppointmentSchema.AppointmentType,
-                            AppointmentSchema.IsResponseRequested,
-                            AppointmentSchema.When
-                        );
-        }
-
-        private static Messages.Appointment Convert(EWSAppointment app)
-        {
-            // TODO: there should be a genuine mapping eventually here, as models may diverge !
-            var serializedPayload = JsonConvert.SerializeObject(app, Formatting.Indented, serializerSettings);
-            return JsonConvert.DeserializeObject<Messages.Appointment>(serializedPayload);
-        }
-
-        private static RequiredAttendee MapToRequiredAttendees(Microsoft.Exchange.WebServices.Data.Attendee att)
-        {
-            return new RequiredAttendee
+            public string ToJson(object value)
             {
-                Address = att.Address,
-                Name = att.Name,
-                MailboxType = (Messages.MailboxType)(int?)att.MailboxType,
-                ResponseType = (Messages.MeetingResponseType)(int?)att.ResponseType,
-                RoutingType = att.RoutingType,
-            };
+                return JsonConvert.SerializeObject(value, Formatting.Indented, serializerSettings);
+            }
         }
 
-        private static OptionalAttendee MapToOptionalAttendees(Microsoft.Exchange.WebServices.Data.Attendee att)
+        class ContextualizedAppointment
         {
-            return new OptionalAttendee
+            public string PrimarySmtpAddress { get; set; }
+
+            public Messages.ItemId Folder { get; set; }
+
+            public Messages.Appointment Appointment { get; set; }
+        }
+
+        interface IAppointmentsProvider
+        {
+            IEnumerable<Appointment> FindByMailbox(string primaryEmailAddress);
+        }
+
+        class ExchangeAppointmentsProvider : IAppointmentsProvider
+        {
+            private readonly ExchangeService service;
+            private readonly TractableJsonSerializer serializer;
+
+            public IEnumerable<Appointment> FindByMailbox(string primaryEmailAddress)
             {
-                Address = att.Address,
-                Name = att.Name,
-                MailboxType = (Messages.MailboxType)(int?)att.MailboxType,
-                ResponseType = (Messages.MeetingResponseType)(int?)att.ResponseType,
-                RoutingType = att.RoutingType,
-            };
-        }
 
-        private static Resource MapToResources(Microsoft.Exchange.WebServices.Data.Attendee att)
-        {
-            return new Resource
+            }
+
+            private IEnumerable<Appointment> FindAllMeetings(string primaryEmailAddress)
             {
-                Address = att.Address,
-                Name = att.Name,
-                MailboxType = (Messages.MailboxType)(int?)att.MailboxType,
-                ResponseType = (Messages.MeetingResponseType)(int?)att.ResponseType,
-                RoutingType = att.RoutingType,
-            };
-        }
+                PropertySet includeMostProps = BuildAppointmentPropertySet();
 
-        private static Messages.ItemId ConvertIdFrom(EWSItemId id)
-        {
-            return new Messages.ItemId {
-                uniqueId = id.UniqueId,
-                changeKey = id.ChangeKey
-            };
+                var findAllAppointments = new Func<ExchangeService, FolderId, IEnumerable<EWSAppointment>>(FindAllAppointments)
+                    .Partial(service);
+
+                var mailboxAppointments = GetAllCalendars(service)
+                    .Select(calendar => calendar.Id)
+                    .SelectMany(findAllAppointments);
+
+                var singleAndReccurringMasterAppointments = mailboxAppointments
+                    .Where(app => singleAndRecurringMasterAppointmentTypes.Contains(app.AppointmentType));
+
+                var singleAndReccurringMasterAppointmentsWithContext = singleAndReccurringMasterAppointments
+                    .Select(app => EWSAppointment.Bind(service, app.Id, includeMostProps))
+                    .Select(appointment => AddMissingAttendeesInfo(service, appointment));
+//                    .Select(app => new ContextualizedAppointment {
+//                        PrimarySmtpAddress = primaryEmailAddress,
+//                        Folder = ConvertIdFrom(app.ParentFolderId),
+//                        Appointment = Convert(app)
+//                    });
+
+                return singleAndReccurringMasterAppointmentsWithContext;
+
+//                var messagesForExportingSingleAndReccurenceAppointments = singleAndReccurringMasterAppointmentsWithContext
+//                    .Select(appCtx => new NewAppointmentDumped
+//                    {
+//                        Mailbox = appCtx.Mailbox,
+//                        FolderId = appCtx.Folder.UniqueId,
+//                        Id = appCtx.Appointment.Id.ToString(),
+//                        Appointment = AddMissingAttendeesInfo(service, appCtx.Appointment),
+//                        SourceAsJson = serializer.ToJson(appCtx.Appointment),
+//                        MimeContent = Encoding.GetEncoding(appCtx.Appointment.MimeContent.CharacterSet)
+//                            .GetString(appCtx.Appointment.MimeContent.Content)
+//                    });
+//
+//                return messagesForExportingSingleAndReccurenceAppointments;
+            }
+
+            private static Messages.Appointment Convert(EWSAppointment app)
+            {
+                // TODO: there should be a genuine mapping eventually here, as models may diverge !
+                var serializedPayload = JsonConvert.SerializeObject(app, Formatting.Indented, serializerSettings);
+                return JsonConvert.DeserializeObject<Messages.Appointment>(serializedPayload);
+            }
+
+            private static RequiredAttendee MapToRequiredAttendees(Microsoft.Exchange.WebServices.Data.Attendee att)
+            {
+                return new RequiredAttendee
+                {
+                    Address = att.Address,
+                    Name = att.Name,
+                    MailboxType = (Messages.MailboxType) (int?) att.MailboxType,
+                    ResponseType = (Messages.MeetingResponseType) (int?) att.ResponseType,
+                    RoutingType = att.RoutingType,
+                };
+            }
+
+            private static OptionalAttendee MapToOptionalAttendees(Microsoft.Exchange.WebServices.Data.Attendee att)
+            {
+                return new OptionalAttendee
+                {
+                    Address = att.Address,
+                    Name = att.Name,
+                    MailboxType = (Messages.MailboxType) (int?) att.MailboxType,
+                    ResponseType = (Messages.MeetingResponseType) (int?) att.ResponseType,
+                    RoutingType = att.RoutingType,
+                };
+            }
+
+            private static Resource MapToResources(Microsoft.Exchange.WebServices.Data.Attendee att)
+            {
+                return new Resource
+                {
+                    Address = att.Address,
+                    Name = att.Name,
+                    MailboxType = (Messages.MailboxType) (int?) att.MailboxType,
+                    ResponseType = (Messages.MeetingResponseType) (int?) att.ResponseType,
+                    RoutingType = att.RoutingType,
+                };
+            }
+
+            private static Messages.ItemId ConvertIdFrom(ServiceId id)
+            {
+                return new Messages.ItemId
+                {
+                    UniqueId = id.UniqueId,
+                    ChangeKey = id.ChangeKey
+                };
+            }
+
+            private static IEnumerable<EWSAppointment> FindAllAppointments(ExchangeService service, FolderId calendarId)
+            {
+                var appIdsView = new ItemView(int.MaxValue)
+                {
+                    PropertySet = new PropertySet(BasePropertySet.IdOnly, AppointmentSchema.AppointmentType)
+                };
+
+                var result = PagedItemsSearch.PageSearchItems<EWSAppointment>(service, calendarId, 500,
+                    appIdsView.PropertySet, AppointmentSchema.DateTimeCreated);
+
+                return result;
+            }
+
+            private static IEnumerable<CalendarFolder> GetAllCalendars(ExchangeService service)
+            {
+                int folderViewSize = int.MaxValue; // Kids, dont do this at home !
+                var view = new FolderView(folderViewSize)
+                {
+                    PropertySet =
+                        new PropertySet(BasePropertySet.IdOnly, FolderSchema.DisplayName, FolderSchema.FolderClass),
+                    Traversal = FolderTraversal.Deep
+                };
+                FindFoldersResults findFolderResults = service.FindFolders(WellKnownFolderName.MsgFolderRoot, view);
+
+                return findFolderResults.OfType<CalendarFolder>();
+            }
+
+            private static PropertySet BuildAppointmentPropertySet()
+            {
+                return new PropertySet(
+                    BasePropertySet.FirstClassProperties,
+                    AppointmentSchema.AppointmentType,
+                    ItemSchema.Body,
+                    AppointmentSchema.RequiredAttendees,
+                    AppointmentSchema.OptionalAttendees,
+                    AppointmentSchema.Resources,
+                    ItemSchema.Categories,
+                    ItemSchema.Culture,
+                    ItemSchema.DateTimeCreated,
+                    ItemSchema.DateTimeReceived,
+                    ItemSchema.DateTimeSent,
+                    ItemSchema.DisplayTo,
+                    ItemSchema.DisplayCc,
+                    AppointmentSchema.Duration,
+                    AppointmentSchema.End,
+                    AppointmentSchema.Start,
+                    AppointmentSchema.StartTimeZone,
+                    ItemSchema.Subject,
+                    AppointmentSchema.TimeZone,
+                    ItemSchema.MimeContent,
+                    AppointmentSchema.ModifiedOccurrences,
+                    AppointmentSchema.DeletedOccurrences,
+                    AppointmentSchema.AppointmentType,
+                    AppointmentSchema.IsResponseRequested,
+                    AppointmentSchema.When
+                );
+            }
+
         }
 
         private static ExchangeService ConnectToExchange(ExchangeServer exchange, Credentials credentials) {
@@ -542,7 +594,7 @@ namespace EchangeExporterProto
             ServicePointManager.ServerCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
 
             service.Credentials = new NetworkCredential(credentials.Login, credentials.Password, credentials.Domain);
-            string exchangeEndpoint = String.Format(exchange.EndpointTemplate, exchange.Host);
+            string exchangeEndpoint = string.Format(exchange.EndpointTemplate, exchange.Host);
             service.Url = new Uri(exchangeEndpoint);
             return service;
         }

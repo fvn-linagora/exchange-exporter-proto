@@ -55,8 +55,8 @@ namespace Messages
 
     public struct ItemId
     {
-        public string uniqueId { get; set; }
-        public string changeKey { get; set; }
+        public string UniqueId { get; set; }
+        public string ChangeKey { get; set; }
     }
 
     public class ModifiedOccurrence
