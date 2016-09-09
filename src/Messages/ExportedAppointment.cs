@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Text;
 
 namespace Messages
 {
@@ -120,8 +121,8 @@ namespace Messages
 
     public class Id
     {
-        public string uniqueId { get; set; }
-        public string changeKey { get; set; }
+        public string UniqueId { get; set; }
+        public string ChangeKey { get; set; }
     }
 
     public class Body
@@ -141,6 +142,12 @@ namespace Messages
         Occurrence,
         Exception,
         RecurringMaster
+    }
+
+    public class MimeContent
+    {
+        public string CharacterSet { get; set; }
+        public byte[] Content { get; set; }
     }
 
     public class Appointment
@@ -173,7 +180,18 @@ namespace Messages
         public bool AllowNewTimeProposal { get; set; }
         public string ICalUid { get; set; }
         public string ICalDateTimeStamp { get; set; }
-        public bool IsAttachment { get; set; }
+
+        public string AsICal
+        {
+            get
+            {
+                return Encoding.GetEncoding(MimeContent?.CharacterSet ?? Encoding.ASCII.ToString())
+                    .GetString(MimeContent?.Content);
+            }
+        }
+        public MimeContent MimeContent { get; set; }
+
+        bool IsAttachment { get; set; }
         public bool IsNew { get; set; }
         public Id Id { get; set; }
         public Id ParentFolderId { get; set; }
