@@ -1,6 +1,5 @@
 ﻿using System;
 using System.IO;
-using System.Configuration;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -8,17 +7,19 @@ using System.Text.RegularExpressions;
 using DDay.iCal;
 using DDay.iCal.Serialization.iCalendar;
 using EasyNetQ;
+using CommandLine;
 
 using Messages;
 using Attendee = DDay.iCal.Attendee;
 using ICalendarTransformersRegistry = System.Collections.Generic.IDictionary<Messages.AppointmentType, System.Func<DDay.iCal.IICalendar, Messages.Appointment, DDay.iCal.IICalendar>>;
 using EventDateMapper = System.Func<DDay.iCal.IEvent, System.DateTimeOffset>;
+using EchangeExporterProto;
 
 namespace EchangeDumpedMessagesListener
 {
     class Program
     {
-        private static readonly string MQCONNETIONSTRING = ConfigurationManager.ConnectionStrings["spewsMQ"].ConnectionString;
+        private const string EXPORTER_CONFIG_SECTION = "exporterConfiguration";
         private static iCalendarSerializer serializer = new iCalendarSerializer();
         private static ICalendarTransformersRegistry mapOfICalendarTransformersByType = BuildCalendarTransformersRegistry();
 
@@ -44,13 +45,46 @@ namespace EchangeDumpedMessagesListener
 
         static void Main(string[] args)
         {
-            using (var bus = RabbitHutch.CreateBus(MQCONNETIONSTRING))
+            using (var bus = RabbitHutch.CreateBus(GetQueueConnectionString(args)))
             {
                 bus.Subscribe<NewAppointmentDumped>("test", CurryForwarderHandlerFrom(HandleNewAppointment, bus));
 
                 Console.WriteLine("Listening for messages. Hit <return> to quit.");
                 Console.ReadLine();
             }
+        }
+
+        private static string GetQueueConnectionString(string[] args)
+        {
+            var result = Parser.Default.ParseArguments<ConfigurationOptions>(args);
+            var arguments = result.MapResult(options => options, ArgumentErrorHandler);
+            var config = new SimpleConfig.Configuration(configPath: arguments.ConfigPath)
+                .LoadSection<ExporterConfiguration>(EXPORTER_CONFIG_SECTION);
+
+            return BuildQueueConnectionString(config);
+        }
+
+        private static string BuildQueueConnectionString(ExporterConfiguration config)
+        {
+            if (String.IsNullOrWhiteSpace(config.MessageQueue.ConnectionString) && String.IsNullOrWhiteSpace(config.MessageQueue.Host))
+                throw new Exception("Could not find either a connection string or an host for MQ!");
+
+            var host = config.MessageQueue.Host;
+            var username = config.MessageQueue.Username ?? "guest";
+            var password = config.MessageQueue.Password ?? "guest";
+            var virtualHost = config.MessageQueue.VirtualHost ?? "/";
+            var port = config.MessageQueue.Port != 0 ? config.MessageQueue.Port : 5672;
+            var connectionString = config.MessageQueue.ConnectionString;
+
+            return !string.IsNullOrWhiteSpace(connectionString) ? connectionString
+                : $"host={host}:{port};virtualHost={virtualHost};username={username};password={password}";
+        }
+
+        private static ConfigurationOptions ArgumentErrorHandler(IEnumerable<Error> errors)
+        {
+            Console.WriteLine("Found issues with '{0}'", String.Join("\n", errors));
+            Environment.Exit(1);
+            return default(ConfigurationOptions);
         }
 
 
