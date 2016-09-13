@@ -3,14 +3,13 @@ using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
-
+using System.Threading;
 using DDay.iCal;
 using DDay.iCal.Serialization.iCalendar;
 using EasyNetQ;
 using CommandLine;
 
 using Messages;
-using Attendee = DDay.iCal.Attendee;
 using ICalendarTransformersRegistry = System.Collections.Generic.IDictionary<Messages.AppointmentType, System.Func<DDay.iCal.IICalendar, Messages.Appointment, DDay.iCal.IICalendar>>;
 using EventDateMapper = System.Func<DDay.iCal.IEvent, System.DateTimeOffset>;
 using EchangeExporterProto;
@@ -22,6 +21,7 @@ namespace EchangeDumpedMessagesListener
         private const string EXPORTER_CONFIG_SECTION = "exporterConfiguration";
         private static iCalendarSerializer serializer = new iCalendarSerializer();
         private static ICalendarTransformersRegistry mapOfICalendarTransformersByType = BuildCalendarTransformersRegistry();
+        private static readonly AutoResetEvent _closing = new AutoResetEvent(false);
 
         private const string EMAIL_VALIDATOR_PATTERN =
             @"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
@@ -49,9 +49,16 @@ namespace EchangeDumpedMessagesListener
             {
                 bus.Subscribe<NewAppointmentDumped>("test", CurryForwarderHandlerFrom(HandleNewAppointment, bus));
 
-                Console.WriteLine("Listening for messages. Hit <return> to quit.");
-                Console.ReadLine();
+                Console.WriteLine("Listening for messages...");
+                Console.CancelKeyPress += new ConsoleCancelEventHandler(OnExit);
+                _closing.WaitOne();
             }
+        }
+
+        protected static void OnExit(object sender, ConsoleCancelEventArgs args)
+        {
+            Console.WriteLine("Exit");
+            _closing.Set();
         }
 
         private static string GetQueueConnectionString(string[] args)
