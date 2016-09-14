@@ -422,7 +422,7 @@ namespace EchangeExporterProto
                     Mailbox = appCtx.Mailbox,
                     FolderId = appCtx.Folder.UniqueId,
                     Id = appCtx.Appointment.Id.ToString(),
-                    Appointment = AddMissingAttendeesInfo(service, appCtx.Appointment),
+                    Appointment = Convert(appCtx.Appointment),
                     SourceAsJson = JsonConvert.SerializeObject(appCtx.Appointment, Formatting.Indented, serializerSettings),
                     MimeContent = Encoding.GetEncoding(appCtx.Appointment.MimeContent.CharacterSet).GetString(appCtx.Appointment.MimeContent.Content)
                 });
@@ -490,50 +490,6 @@ namespace EchangeExporterProto
             // TODO: there should be a genuine mapping eventually here, as models may diverge !
             var serializedPayload = JsonConvert.SerializeObject(app, Formatting.Indented, serializerSettings);
             return JsonConvert.DeserializeObject<Messages.Appointment>(serializedPayload);
-        }
-
-        private static Messages.Appointment AddMissingAttendeesInfo(ExchangeService service, EWSAppointment appointment)
-        {
-            if (appointment.AppointmentType != EWSAppointmentType.RecurringMaster)
-                return Convert(appointment);
-            if (appointment.ModifiedOccurrences == null)
-                return Convert(appointment);
-
-            // appointment is of type RecurringMaster from here
-            var reccurenceExceptionIds = appointment.ModifiedOccurrences.Select(occ => occ.ItemId);
-            var reccurenceExceptionsAttendees = reccurenceExceptionIds
-                .Select(id => EWSAppointment.Bind(service, id, new PropertySet( 
-                    BasePropertySet.IdOnly, AppointmentSchema.RequiredAttendees,
-                    AppointmentSchema.OptionalAttendees,
-                    AppointmentSchema.Resources)))
-                .ToDictionary( k => ConvertIdFrom(k.Id), v => v );
-
-            var dtoAppointment = Convert(appointment);
-
-            // TODO: include per attendee's iCal RSVP, found globally in appointment.IsResponseRequested property
-
-            foreach (var occurence in dtoAppointment.ModifiedOccurrences)
-            {
-                if (reccurenceExceptionsAttendees.ContainsKey(occurence.ItemId))
-                {
-                    var exceptionAppointmentInfo = reccurenceExceptionsAttendees[occurence.ItemId];
-                    // NOTE: ignoring optional attendees for now
-
-                    var required = exceptionAppointmentInfo.RequiredAttendees
-                        .Select(MapToRequiredAttendees);
-                    var optional = exceptionAppointmentInfo.OptionalAttendees
-                        .Select(MapToOptionalAttendees);
-                    var resources = exceptionAppointmentInfo.OptionalAttendees
-                        .Select(MapToResources);
-
-                    var allInvitedAttendees = required.Cast<InvitedAttendee>()
-                        .Union(optional.Cast<InvitedAttendee>())
-                        .Union(resources.Cast<InvitedAttendee>());
-
-                    occurence.Attendees = allInvitedAttendees.Cast<Messages.Attendee>().ToList();
-                }
-            }
-            return dtoAppointment;
         }
 
         private static RequiredAttendee MapToRequiredAttendees(Microsoft.Exchange.WebServices.Data.Attendee att)
