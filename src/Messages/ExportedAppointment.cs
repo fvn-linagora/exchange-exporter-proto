@@ -1,4 +1,4 @@
-﻿using System;
+﻿using System.Linq;
 using System.Collections.Generic;
 using System.Text;
 
@@ -44,6 +44,23 @@ namespace Messages
 
     public class Resource : InvitedAttendee { }
 
+    public class ExceptionAttendees
+    {
+        public ISet<OptionalAttendee> Optional { get; set; }
+        public ISet<RequiredAttendee> Required { get; set; }
+        public ISet<Resource> Resources { get; set; }
+
+        public IEnumerable<InvitedAttendee> All {
+            get {
+                return
+                    Optional.Cast<InvitedAttendee>()
+                    .Union(Required.Cast<InvitedAttendee>())
+                    .Union(Resources.Cast<InvitedAttendee>());
+            }
+        }
+    }
+
+
     public class Recurrence
     {
         public List<int> DaysOfTheWeek { get; set; }
@@ -63,7 +80,7 @@ namespace Messages
     public class ModifiedOccurrence
     {
         public ItemId ItemId { get; set; }
-        public List<Attendee> Attendees { get; set; }
+        public ExceptionAttendees Attendees { get; set; }
         public string Start { get; set; }
         public string End { get; set; }
         public string OriginalStart { get; set; }
@@ -190,6 +207,8 @@ namespace Messages
             }
         }
         public MimeContent MimeContent { get; set; }
+
+        public IDictionary<Id, ExceptionAttendees> AttendeeStatus { get; set; }
 
         bool IsAttachment { get; set; }
         public bool IsNew { get; set; }

@@ -45,7 +45,6 @@
     <Compile Include="..\EchangeExporterProto\ExporterConfiguration.cs">
       <Link>ExporterConfiguration.cs</Link>
     </Compile>
-    <Compile Include="AttendeeCollectionExtensions.cs" />
     <Compile Include="ConfigurationOptions.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

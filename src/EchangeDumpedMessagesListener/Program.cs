@@ -19,9 +19,9 @@ namespace EchangeDumpedMessagesListener
     class Program
     {
         private const string EXPORTER_CONFIG_SECTION = "exporterConfiguration";
-        private static iCalendarSerializer serializer = new iCalendarSerializer();
-        private static ICalendarTransformersRegistry mapOfICalendarTransformersByType = BuildCalendarTransformersRegistry();
-        private static readonly AutoResetEvent _closing = new AutoResetEvent(false);
+        private static readonly iCalendarSerializer serializer = new iCalendarSerializer();
+        private static readonly ICalendarTransformersRegistry mapOfICalendarTransformersByType = BuildCalendarTransformersRegistry();
+        private static readonly AutoResetEvent closingConsole = new AutoResetEvent(false);
 
         private const string EMAIL_VALIDATOR_PATTERN =
             @"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
@@ -35,7 +35,7 @@ namespace EchangeDumpedMessagesListener
             [typeof(Resource)] = "NON-PARTICIPANT"
         };
 
-        static Dictionary<Type, Func<Appointment, IEnumerable<InvitedAttendee>>> mapAttendeeTypeToCollectionPropertyProvider = new Dictionary<Type, Func<Appointment, IEnumerable<InvitedAttendee>>>
+        static readonly Dictionary<Type, Func<Appointment, IEnumerable<InvitedAttendee>>> mapAttendeeTypeToCollectionPropertyProvider= new Dictionary<Type, Func<Appointment, IEnumerable<InvitedAttendee>>>
         {
             [typeof(RequiredAttendee)] = app => app.RequiredAttendees,
             [typeof(OptionalAttendee)] = app => app.OptionalAttendees,
@@ -47,18 +47,18 @@ namespace EchangeDumpedMessagesListener
         {
             using (var bus = RabbitHutch.CreateBus(GetQueueConnectionString(args)))
             {
-                bus.Subscribe<NewAppointmentDumped>("test", CurryForwarderHandlerFrom(HandleNewAppointment, bus));
+                bus.Subscribe("test", CurryForwarderHandlerFrom(HandleNewAppointment, bus));
 
                 Console.WriteLine("Listening for messages...");
-                Console.CancelKeyPress += new ConsoleCancelEventHandler(OnExit);
-                _closing.WaitOne();
+                Console.CancelKeyPress += OnExit;
+                closingConsole.WaitOne();
             }
         }
 
         protected static void OnExit(object sender, ConsoleCancelEventArgs args)
         {
             Console.WriteLine("Exit");
-            _closing.Set();
+            closingConsole.Set();
         }
 
         private static string GetQueueConnectionString(string[] args)
@@ -73,7 +73,7 @@ namespace EchangeDumpedMessagesListener
 
         private static string BuildQueueConnectionString(ExporterConfiguration config)
         {
-            if (String.IsNullOrWhiteSpace(config.MessageQueue.ConnectionString) && String.IsNullOrWhiteSpace(config.MessageQueue.Host))
+            if (string.IsNullOrWhiteSpace(config.MessageQueue.ConnectionString) && string.IsNullOrWhiteSpace(config.MessageQueue.Host))
                 throw new Exception("Could not find either a connection string or an host for MQ!");
 
             var host = config.MessageQueue.Host;
@@ -89,7 +89,7 @@ namespace EchangeDumpedMessagesListener
 
         private static ConfigurationOptions ArgumentErrorHandler(IEnumerable<Error> errors)
         {
-            Console.WriteLine("Found issues with '{0}'", String.Join("\n", errors));
+            Console.WriteLine($"Found issues with '{string.Join("\n", errors)}'");
             Environment.Exit(1);
             return default(ConfigurationOptions);
         }
@@ -97,7 +97,7 @@ namespace EchangeDumpedMessagesListener
 
         private static ICalendarTransformersRegistry BuildCalendarTransformersRegistry()
         {
-            return new Dictionary<AppointmentType, Func<IICalendar, Messages.Appointment, IICalendar>>() {
+            return new Dictionary<AppointmentType, Func<IICalendar, Appointment, IICalendar>> {
                 {AppointmentType.Single, SingleEventAttendeesAppender},
                 {AppointmentType.RecurringMaster, ReccuringOccurenceHandler},
                 {AppointmentType.Exception, (cal, _) => cal },
@@ -106,13 +106,14 @@ namespace EchangeDumpedMessagesListener
         }
 
 
-        static Action<NewAppointmentDumped> CurryForwarderHandlerFrom(Action<NewAppointmentDumped, Action<NewMimeEventExported>> forwarderHandler, IBus serviceBus)
-        {
-            return incoming => forwarderHandler(incoming, serviceBus.Publish);
-        }
+        private static Action<NewAppointmentDumped> CurryForwarderHandlerFrom(Action<NewAppointmentDumped, Action<NewMimeEventExported>> forwarderHandler,
+            IBus serviceBus) => incoming => forwarderHandler?.Invoke(incoming, serviceBus.Publish);
 
         static void HandleNewAppointment(NewAppointmentDumped app, Action<NewMimeEventExported> newMessageConsumer)
         {
+            if (newMessageConsumer == null)
+                throw new ArgumentNullException(nameof(newMessageConsumer));
+
             Console.ForegroundColor = ConsoleColor.Red;
 
             var iCal = iCalendar.LoadFromStream(new StringReader(app.MimeContent)).Single(); // Should throw if Mime has multiple calendars/events
@@ -133,11 +134,11 @@ namespace EchangeDumpedMessagesListener
 
             newMessageConsumer(message);
 
-            Console.WriteLine("Got message: {0}", app.Appointment.Subject);
+            Console.WriteLine($"Got message: {app.Appointment.Subject}");
             Console.ResetColor();
         }
 
-        private static IICalendar SingleEventAttendeesAppender(IICalendar calendar, Messages.Appointment singleOccurenceAppointment)
+        private static IICalendar SingleEventAttendeesAppender(IICalendar calendar, Appointment singleOccurenceAppointment)
         {
             if (singleOccurenceAppointment.RequiredAttendees.Count <= 0 && singleOccurenceAppointment.OptionalAttendees.Count <= 0)
                 return calendar;
@@ -149,7 +150,7 @@ namespace EchangeDumpedMessagesListener
             return updatedCalendar;
         }
 
-        private static DDay.iCal.IEvent AddMissingAttendees(Messages.Appointment appointment, DDay.iCal.IEvent iCalEvent)
+        private static DDay.iCal.IEvent AddMissingAttendees(Appointment appointment, DDay.iCal.IEvent iCalEvent)
         {
             var missingAttendeesButTheOrganizer = ConvertAttendeesOfType<RequiredAttendee>(appointment)
                 .Union(ConvertAttendeesOfType<OptionalAttendee>(appointment))
@@ -188,7 +189,6 @@ namespace EchangeDumpedMessagesListener
             if (attendeesCollection == null)
                 yield break;
 
-
             var iCalAttendees = attendeesCollection
                 .Where(IsAttendeesAddressSet)
                 .Select(attendee => ConvertToICal<T>(appointment.IsResponseRequested, attendee));
@@ -215,10 +215,8 @@ namespace EchangeDumpedMessagesListener
             };
         }
 
-        private static bool IsAppointmentOrganizer(Appointment appointment, Messages.Attendee attendee)
-        {
-            return string.Equals((appointment?.Organizer).Address, attendee.Address, StringComparison.InvariantCultureIgnoreCase);
-        }
+        private static bool IsAppointmentOrganizer(Appointment appointment, Messages.Attendee attendee) =>
+            string.Equals((appointment?.Organizer).Address, attendee.Address, StringComparison.InvariantCultureIgnoreCase);
 
         private static string ConvertToRole<T>() where T : InvitedAttendee
         {
@@ -241,13 +239,17 @@ namespace EchangeDumpedMessagesListener
                         case MailboxType.Contact:
                         case MailboxType.Mailbox:
                             return "INDIVIDUAL";
+                        case MailboxType.Unknown:
+                        case MailboxType.OneOff:
+                        case null:
+                            return "UNKNOWN";
                         default:
                             return "UNKNOWN";
                     }
             }
         }
 
-        private static string ConvertToParticipationStatus(MeetingResponseType? responseType)
+        public static string ConvertToParticipationStatus(MeetingResponseType? responseType)
         {
             if (!responseType.HasValue)
                 return "NEEDS-ACTION";
@@ -260,6 +262,10 @@ namespace EchangeDumpedMessagesListener
                     return "DECLINED";
                 case MeetingResponseType.Tentative:
                     return "TENTATIVE";
+                case MeetingResponseType.Unknown:
+                case MeetingResponseType.Organizer:
+                case MeetingResponseType.NoResponseReceived:
+                    return "NEEDS-ACTION";
                 default:
                     return "NEEDS-ACTION";
             }
@@ -282,7 +288,7 @@ namespace EchangeDumpedMessagesListener
             return calendarWithAttendeesAndFixedRecurrenceIdsAndRepeatedOrganizers;
         }
 
-        private static IICalendar AppendMissingAttendeesToReccuringOccurence(Messages.Appointment reccuringAppointment, IICalendar calendar)
+        private static IICalendar AppendMissingAttendeesToReccuringOccurence(Appointment reccuringAppointment, IICalendar calendar)
         {
             if (reccuringAppointment == null)
                 return calendar;
@@ -297,7 +303,7 @@ namespace EchangeDumpedMessagesListener
             var exceptionsAttendeesOrderedByDate = reccuringAppointment.ModifiedOccurrences
                 .Select(occ => new {
                     Start = DateTime.Parse(occ.Start).ToString("o"),
-                    Attendees = occ.Attendees.Where(isNotEventOrganizer)
+                    Attendees = occ.Attendees.All.Where(isNotEventOrganizer)
                 })
                 .OrderBy(occ => occ.Start);
 
@@ -343,7 +349,7 @@ namespace EchangeDumpedMessagesListener
 
         private static IICalendar FixReccuringExceptionsReccurenceId(Appointment reccuringAppointment, IICalendar calendar)
         {
-            if (reccuringAppointment == null || reccuringAppointment.ModifiedOccurrences == null)
+            if (reccuringAppointment?.ModifiedOccurrences == null)
                 return calendar;
 
             var updatedCalendar = calendar.Copy<IICalendar>();
@@ -360,7 +366,7 @@ namespace EchangeDumpedMessagesListener
             return updatedCalendar;
         }
 
-        private static Func<DDay.iCal.IEvent, Event> BuildEventRecurrenceIdFixer(Appointment reccuringAppointment, List<DDay.iCal.IEvent> calendarEvents)
+        private static Func<DDay.iCal.IEvent, Event> BuildEventRecurrenceIdFixer(Appointment reccuringAppointment, IEnumerable<DDay.iCal.IEvent> calendarEvents)
         {
             var mapOfModifiedOccurrences = BuildMapOfStartDateToReccurrenceException(calendarEvents, reccuringAppointment.ModifiedOccurrences);
             EventDateMapper originalStartDateMapper = ev => DateTimeOffset.Parse(mapOfModifiedOccurrences[ev.Start].OriginalStart);
@@ -394,9 +400,9 @@ namespace EchangeDumpedMessagesListener
         }
         private static IICalendar RepeatOrganizerInOccurences(Appointment reccuringAppointment, IICalendar calendar)
         {
-            if (reccuringAppointment == null || reccuringAppointment.ModifiedOccurrences == null)
+            if (reccuringAppointment?.ModifiedOccurrences == null)
                 return calendar;
-            if (reccuringAppointment.Organizer == null || string.IsNullOrWhiteSpace(reccuringAppointment.Organizer.Address))
+            if (string.IsNullOrWhiteSpace(reccuringAppointment.Organizer?.Address))
                 return calendar;
 
             var updatedCalendar = calendar.Copy<IICalendar>();

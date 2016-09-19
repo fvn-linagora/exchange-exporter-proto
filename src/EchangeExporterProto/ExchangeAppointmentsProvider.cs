@@ -1,9 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Linq.Expressions;
-using System.Reflection;
-using Bender.Collections;
 using Newtonsoft.Json;
 
 using Microsoft.Exchange.WebServices.Data;
@@ -11,6 +8,7 @@ using AppointmentType = Microsoft.Exchange.WebServices.Data.AppointmentType;
 using Attendee = Microsoft.Exchange.WebServices.Data.Attendee;
 using EWSAppointment = Microsoft.Exchange.WebServices.Data.Appointment;
 using EWSAppointmentType = Microsoft.Exchange.WebServices.Data.AppointmentType;
+using Messages;
 using Appointment = Messages.Appointment;
 
 namespace EchangeExporterProto
@@ -46,7 +44,7 @@ namespace EchangeExporterProto
 
             var findAllAppointments = new Func<CalendarFolder, IEnumerable<EWSAppointment>>
                 (calendar => FindAllAppointments(service, calendar.Id));
-            var repairMaster = new Func<ExchangeService, EWSAppointment, EWSAppointment>
+            var repairMaster = new Func<ExchangeService, EWSAppointment, AppointmentWithParticipation>
                 (RepairReccurenceMasterAttendees).Partial(service);
             var fetchAppointmentDetails = new Func<EWSAppointment, EWSAppointment>(
                 app => EWSAppointment.Bind(service, app.Id, includeMostProps));
@@ -62,9 +60,37 @@ namespace EchangeExporterProto
                 .Select(repairMaster);
 
             return singleAndReccurringMasterAppointmentsWithContext
-                .Select(Convert);
+                .Select(ToAppointmentDTO);
         }
 
+        private Appointment ToAppointmentDTO(AppointmentWithParticipation appointment)
+        {
+            var appointmentWithAttendeeStatus = Convert(appointment.Appointment);
+
+            if (appointment.Appointment.AppointmentType != AppointmentType.RecurringMaster)
+                return appointmentWithAttendeeStatus;
+
+            var mapOfExceptionAttendees = appointment.ExceptionsAttendees
+                .ToDictionary(k => k.Key.UniqueId, v => v.Value);
+
+            foreach (var exc in appointmentWithAttendeeStatus.ModifiedOccurrences ?? Enumerable.Empty<ModifiedOccurrence>())
+            {
+                var exceptionAttendeesParticipation = mapOfExceptionAttendees[exc.ItemId.UniqueId];
+
+                exc.Attendees = new Messages.ExceptionAttendees
+                {
+                    Optional = new HashSet<OptionalAttendee>(exceptionAttendeesParticipation.Optional
+                        .Select(MapToOptionalAttendees)),
+                    Required = new HashSet<RequiredAttendee>(exceptionAttendeesParticipation.Required
+                        .Select(MapToRequiredAttendees)),
+                    Resources = new HashSet<Resource>(exceptionAttendeesParticipation.Resources
+                        .Select(MapToResources)),
+                };
+
+            }
+
+            return appointmentWithAttendeeStatus;
+        }
 
         private Appointment Convert(EWSAppointment appointment)
         {
@@ -80,12 +106,12 @@ namespace EchangeExporterProto
             return result;
         }
 
-        private EWSAppointment RepairReccurenceMasterAttendees(ExchangeService service, EWSAppointment appointment)
+        private AppointmentWithParticipation RepairReccurenceMasterAttendees(ExchangeService service, EWSAppointment appointment)
         {
             if (appointment.AppointmentType != AppointmentType.RecurringMaster)
-                return appointment;
+                return new AppointmentWithParticipation(appointment);
             if (appointment.ModifiedOccurrences == null)
-                return appointment;
+                return new AppointmentWithParticipation(appointment);
 
             var appointmentsExceptionsWithAttendees = appointment.ModifiedOccurrences.Select(exception =>
                 EWSAppointment.Bind(service, exception.ItemId, new PropertySet(
@@ -95,45 +121,19 @@ namespace EchangeExporterProto
                     AppointmentSchema.Resources)))
                 .ToList();
 
-            ReplaceAppointmentsAttendees(appointment, appointmentsExceptionsWithAttendees, app => app.RequiredAttendees);
-            ReplaceAppointmentsAttendees(appointment, appointmentsExceptionsWithAttendees, app => app.OptionalAttendees);
-            ReplaceAppointmentsAttendees(appointment, appointmentsExceptionsWithAttendees, app => app.Resources);
-//            ReplaceAttendees(appointmentsExceptionsWithAttendees.SelectMany(app => app.RequiredAttendees),
-//                appointment.RequiredAttendees);
-//            ReplaceAttendees(appointmentsExceptionsWithAttendees.SelectMany(app => app.OptionalAttendees),
-//                appointment.OptionalAttendees);
-//            ReplaceAttendees(appointmentsExceptionsWithAttendees.SelectMany(app => app.Resources),
-//                appointment.Resources);
-
-            return appointment;
+            return new AppointmentWithParticipation(appointment) {
+                ExceptionsAttendees = appointmentsExceptionsWithAttendees
+                    .Select(e => new {
+                        ItemId = e.Id,
+                        ExceptionsAttendees = new ExceptionAttendees {
+                            Optional = e.OptionalAttendees,
+                            Required = e.RequiredAttendees,
+                            Resources = e.Resources
+                        }
+                    })
+                    .ToDictionary(k => k.ItemId, v => v.ExceptionsAttendees),
+            };
         }
-
-        private void ReplaceAppointmentsAttendees(EWSAppointment master, IEnumerable<EWSAppointment> exceptions,
-            Expression<Func<EWSAppointment, AttendeeCollection>> attendeePropMapper)
-        {
-            var propExpr = (MemberExpression) attendeePropMapper.Body;
-            if (!(propExpr.Member is PropertyInfo)) return;
-
-            var attendeesGetter = attendeePropMapper.Compile();
-
-            var masterAttendees = attendeesGetter(master);
-            masterAttendees.Clear();
-            var exceptionsAttendees = exceptions.SelectMany(attendeesGetter);
-
-            exceptionsAttendees
-                .ToLookup(GetAttendeesKey).Select(e => e.First())
-                .ForEach(masterAttendees.Add);
-        }
-
-        private static void ReplaceAttendees(IEnumerable<Attendee> exceptionsAttendees, AttendeeCollection masterAttendees)
-        {
-            masterAttendees.Clear();
-            exceptionsAttendees
-                .ToLookup(GetAttendeesKey).Select(e => e.First())
-                .ForEach(masterAttendees.Add);
-        }
-
-        private static string GetAttendeesKey(Attendee att) => (att?.ToString() ?? "").Trim().ToLower();
 
         private static IEnumerable<EWSAppointment> FindAllAppointments(ExchangeService service, FolderId calendarId)
         {
@@ -160,6 +160,42 @@ namespace EchangeExporterProto
             FindFoldersResults findFolderResults = service.FindFolders(WellKnownFolderName.MsgFolderRoot, view);
 
             return findFolderResults.OfType<CalendarFolder>();
+        }
+
+        private static RequiredAttendee MapToRequiredAttendees(Attendee att)
+        {
+            return new RequiredAttendee
+            {
+                Address = att.Address,
+                Name = att.Name,
+                MailboxType = (Messages.MailboxType)(int?)att.MailboxType,
+                ResponseType = (Messages.MeetingResponseType)(int?)att.ResponseType,
+                RoutingType = att.RoutingType,
+            };
+        }
+
+        private static OptionalAttendee MapToOptionalAttendees(Attendee att)
+        {
+            return new OptionalAttendee
+            {
+                Address = att.Address,
+                Name = att.Name,
+                MailboxType = (Messages.MailboxType)(int?)att.MailboxType,
+                ResponseType = (Messages.MeetingResponseType)(int?)att.ResponseType,
+                RoutingType = att.RoutingType,
+            };
+        }
+
+        private static Resource MapToResources(Attendee att)
+        {
+            return new Resource
+            {
+                Address = att.Address,
+                Name = att.Name,
+                MailboxType = (Messages.MailboxType)(int?)att.MailboxType,
+                ResponseType = (Messages.MeetingResponseType)(int?)att.ResponseType,
+                RoutingType = att.RoutingType,
+            };
         }
 
         private static PropertySet BuildAppointmentPropertySet()
