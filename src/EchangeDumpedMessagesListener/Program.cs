@@ -4,14 +4,22 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
-using DDay.iCal;
-using DDay.iCal.Serialization.iCalendar;
 using EasyNetQ;
 using CommandLine;
+using Ical.Net;
+using Ical.Net.DataTypes;
+using Ical.Net.Interfaces;
+using Ical.Net.Serialization.iCalendar.Serializers;
+using IcalIEvent = Ical.Net.Interfaces.Components.IEvent;
+using IcalEvent = Ical.Net.Event;
+using IcalIAttendee = Ical.Net.Interfaces.DataTypes.IAttendee;
+using IcalAttendee = Ical.Net.DataTypes.Attendee;
 
 using Messages;
-using ICalendarTransformersRegistry = System.Collections.Generic.IDictionary<Messages.AppointmentType, System.Func<DDay.iCal.IICalendar, Messages.Appointment, DDay.iCal.IICalendar>>;
-using EventDateMapper = System.Func<DDay.iCal.IEvent, System.DateTimeOffset>;
+using ICalendarTransformersRegistry = System.Collections.Generic.IDictionary<
+    Messages.AppointmentType,
+    System.Func<Ical.Net.Interfaces.ICalendar, Messages.Appointment, Ical.Net.Interfaces.ICalendar>>;
+using EventDateMapper = System.Func<Ical.Net.Interfaces.Components.IEvent, System.DateTimeOffset>;
 using EchangeExporterProto;
 
 namespace EchangeDumpedMessagesListener
@@ -19,7 +27,7 @@ namespace EchangeDumpedMessagesListener
     class Program
     {
         private const string EXPORTER_CONFIG_SECTION = "exporterConfiguration";
-        private static readonly iCalendarSerializer serializer = new iCalendarSerializer();
+        private static readonly CalendarSerializer serializer = new CalendarSerializer();
         private static readonly ICalendarTransformersRegistry mapOfICalendarTransformersByType = BuildCalendarTransformersRegistry();
         private static readonly AutoResetEvent closingConsole = new AutoResetEvent(false);
 
@@ -61,7 +69,7 @@ namespace EchangeDumpedMessagesListener
             closingConsole.Set();
         }
 
-        private static string GetQueueConnectionString(string[] args)
+        private static string GetQueueConnectionString(IEnumerable<string> args)
         {
             var result = Parser.Default.ParseArguments<ConfigurationOptions>(args);
             var arguments = result.MapResult(options => options, ArgumentErrorHandler);
@@ -97,7 +105,7 @@ namespace EchangeDumpedMessagesListener
 
         private static ICalendarTransformersRegistry BuildCalendarTransformersRegistry()
         {
-            return new Dictionary<AppointmentType, Func<IICalendar, Appointment, IICalendar>> {
+            return new Dictionary<AppointmentType, Func<ICalendar, Appointment, ICalendar>> {
                 {AppointmentType.Single, SingleEventAttendeesAppender},
                 {AppointmentType.RecurringMaster, ReccuringOccurenceHandler},
                 {AppointmentType.Exception, (cal, _) => cal },
@@ -116,8 +124,14 @@ namespace EchangeDumpedMessagesListener
 
             Console.ForegroundColor = ConsoleColor.Red;
 
-            var iCal = iCalendar.LoadFromStream(new StringReader(app.MimeContent)).Single(); // Should throw if Mime has multiple calendars/events
+            ICalendar iCal;
+            using (var mimeStreamReader = new StringReader(app.MimeContent))
+                iCal = Calendar.LoadFromStream<Calendar>(mimeStreamReader).SingleOrDefault();
 
+            if (iCal == default(ICalendar)) {
+                Console.WriteLine($"ERROR: Mailbox: '{app.Mailbox}', Event '{app.Appointment.Subject} organized by '{app.Appointment.Organizer}': found more than one calendar in MIME! Skipping ...");
+                return;
+            }
             var fixCalendar = mapOfICalendarTransformersByType[app.Appointment.AppointmentType];
             var fixedCalendar = fixCalendar(iCal, app.Appointment);
 
@@ -138,31 +152,31 @@ namespace EchangeDumpedMessagesListener
             Console.ResetColor();
         }
 
-        private static IICalendar SingleEventAttendeesAppender(IICalendar calendar, Appointment singleOccurenceAppointment)
+        private static ICalendar SingleEventAttendeesAppender(ICalendar calendar, Appointment singleOccurenceAppointment)
         {
             if (singleOccurenceAppointment.RequiredAttendees.Count <= 0 && singleOccurenceAppointment.OptionalAttendees.Count <= 0)
                 return calendar;
 
             var updatedEventWithAttendees = AddMissingAttendees(singleOccurenceAppointment, calendar.Events.Single().Copy<Event>());
-            var updatedCalendar = calendar.Copy<IICalendar>();
+            var updatedCalendar = calendar.Copy<ICalendar>();
             updatedCalendar.Events.Clear();
             updatedCalendar.Events.Add(updatedEventWithAttendees);
             return updatedCalendar;
         }
 
-        private static DDay.iCal.IEvent AddMissingAttendees(Appointment appointment, DDay.iCal.IEvent iCalEvent)
+        private static IcalIEvent AddMissingAttendees(Appointment appointment, IcalIEvent iCalEvent)
         {
             var missingAttendeesButTheOrganizer = ConvertAttendeesOfType<RequiredAttendee>(appointment)
                 .Union(ConvertAttendeesOfType<OptionalAttendee>(appointment))
                 .Union(ConvertAttendeesOfType<Resource>(appointment))
                 .Where(attendee => !IsEventOrganizer(appointment, attendee));
 
-            var eventWithAttendees = iCalEvent.Copy<Event>();
+            var eventWithAttendees = iCalEvent.Copy<IcalEvent>();
             eventWithAttendees.Attendees.Clear();
-            eventWithAttendees.Attendees.AddRange(missingAttendeesButTheOrganizer);
+            missingAttendeesButTheOrganizer.ToList().ForEach(eventWithAttendees.Attendees.Add);
 
             if (eventWithAttendees.Organizer == null && appointment?.Organizer?.Address != null) {
-                eventWithAttendees.Organizer = new DDay.iCal.Organizer {
+                eventWithAttendees.Organizer = new Ical.Net.DataTypes.Organizer {
                     CommonName = appointment.Organizer.Name,
                     Value = new Uri($"mailto:{ appointment.Organizer.Address}"),
                 };
@@ -171,14 +185,14 @@ namespace EchangeDumpedMessagesListener
             return eventWithAttendees;
         }
 
-        private static bool IsEventOrganizer(Appointment appointment, DDay.iCal.Attendee attendee)
+        private static bool IsEventOrganizer(Appointment appointment, IcalIAttendee attendee)
         {
             var attendeesAddress = $"{attendee.Value.UserInfo}@{attendee.Value.DnsSafeHost}";
 
             return string.Equals(appointment.Organizer.Address, attendeesAddress, StringComparison.InvariantCultureIgnoreCase);
         }
 
-        private static IEnumerable<DDay.iCal.Attendee> ConvertAttendeesOfType<T>(Appointment appointment) where T : InvitedAttendee
+        private static IEnumerable<IcalIAttendee> ConvertAttendeesOfType<T>(Appointment appointment) where T : InvitedAttendee
         {
             var attendeeType = typeof(T);
             if (!mapAttendeeTypeToCollectionPropertyProvider.ContainsKey(attendeeType))
@@ -197,21 +211,21 @@ namespace EchangeDumpedMessagesListener
                 yield return attendee;
         }
 
-        private static DDay.iCal.Attendee ConvertToICal<T>(bool isResponseRequested, InvitedAttendee attendee) where T : InvitedAttendee
+        private static IcalAttendee ConvertToICal<T>(bool isResponseRequested, InvitedAttendee attendee) where T : InvitedAttendee
         {
             if (attendee == null || !IsAttendeesAddressSet(attendee))
                 throw new ArgumentNullException(nameof(attendee));
 
             string contactAddress = HasAttendeeGotAnEmailSet(attendee) ? attendee.Address : attendee.Name;
 
-            return new DDay.iCal.Attendee
+            return new IcalAttendee
             {
                 Value = new Uri($"mailto:{contactAddress}"),
                 CommonName = attendee.Name,
                 ParticipationStatus = ConvertToParticipationStatus(attendee.ResponseType),
                 Type = GuessUserType<T>(attendee),
                 Role = ConvertToRole<T>(),
-                RSVP = isResponseRequested,
+                Rsvp = isResponseRequested,
             };
         }
 
@@ -278,7 +292,7 @@ namespace EchangeDumpedMessagesListener
 
         private static bool IsEmailAddress(string attendeeName) => !string.IsNullOrWhiteSpace(attendeeName) && emailValidationRegex.IsMatch(attendeeName);
 
-        private static IICalendar ReccuringOccurenceHandler(IICalendar calendar, Messages.Appointment reccuringAppointment)
+        private static ICalendar ReccuringOccurenceHandler(ICalendar calendar, Messages.Appointment reccuringAppointment)
         {
             // TODO: curry with reccuringAppointment and pipeline with calendars
             var calendarWithAttendees = AppendMissingAttendeesToReccuringOccurence(reccuringAppointment, calendar);
@@ -288,14 +302,14 @@ namespace EchangeDumpedMessagesListener
             return calendarWithAttendeesAndFixedRecurrenceIdsAndRepeatedOrganizers;
         }
 
-        private static IICalendar AppendMissingAttendeesToReccuringOccurence(Appointment reccuringAppointment, IICalendar calendar)
+        private static ICalendar AppendMissingAttendeesToReccuringOccurence(Appointment reccuringAppointment, ICalendar calendar)
         {
             if (reccuringAppointment == null)
                 return calendar;
             if (reccuringAppointment.ModifiedOccurrences == null)
                 return calendar;
 
-            var updatedCalendar = calendar.Copy<IICalendar>();
+            var updatedCalendar = calendar.Copy<ICalendar>();
             updatedCalendar.Events.Clear(); // All but events
 
             Func<Messages.Attendee, bool> isNotEventOrganizer = attendee => !IsAppointmentOrganizer(reccuringAppointment, attendee);
@@ -308,8 +322,8 @@ namespace EchangeDumpedMessagesListener
                 .OrderBy(occ => occ.Start);
 
             var exceptionEventsWithAttendees = calendar.Events
-                .Where(ev => ev.RecurrenceID != null)
-                .OrderBy(ev => ev.Start.ToString("o"))
+                .Where(ev => ev.RecurrenceId != null)
+                .OrderBy(ev => ev.Start.AsUtc.ToString("o"))
                 .Zip(exceptionsAttendeesOrderedByDate, (vev, att) => new {
                     Event = vev,
                     Attendees = ConvertAttendeesToICal(att.Attendees, reccuringAppointment.IsResponseRequested)
@@ -317,21 +331,22 @@ namespace EchangeDumpedMessagesListener
 
             var updatedExceptionEvents = exceptionEventsWithAttendees
                 .Select(ewa => {
-                    ewa.Event.Attendees.AddRange(ewa.Attendees);
+                    ewa.Attendees.ToList()
+                        .ForEach(ewa.Event.Attendees.Add);
                     return ewa.Event;
                 });
 
             updatedExceptionEvents.ToList()
                 .ForEach(updatedCalendar.Events.Add);
 
-            var masterEvent = calendar.Events.Single(ev => ev.RecurrenceID == null).Copy<Event>();
+            var masterEvent = calendar.Events.Single(ev => ev.RecurrenceId == null).Copy<IcalEvent>();
             var updatedMasterEventWithAttendees = AddMissingAttendees(reccuringAppointment, masterEvent);
             updatedCalendar.Events.Add(updatedMasterEventWithAttendees);
 
             return updatedCalendar;
         }
 
-        private static IEnumerable<DDay.iCal.Attendee> ConvertAttendeesToICal(IEnumerable<Messages.Attendee> attendees, bool isResponseRequested)
+        private static IEnumerable<IcalAttendee> ConvertAttendeesToICal(IEnumerable<Messages.Attendee> attendees, bool isResponseRequested)
         {
             var requiredAttendees = attendees
                 .OfType<RequiredAttendee>()
@@ -347,12 +362,12 @@ namespace EchangeDumpedMessagesListener
             return result;
         }
 
-        private static IICalendar FixReccuringExceptionsReccurenceId(Appointment reccuringAppointment, IICalendar calendar)
+        private static ICalendar FixReccuringExceptionsReccurenceId(Appointment reccuringAppointment, ICalendar calendar)
         {
             if (reccuringAppointment?.ModifiedOccurrences == null)
                 return calendar;
 
-            var updatedCalendar = calendar.Copy<IICalendar>();
+            var updatedCalendar = calendar.Copy<ICalendar>();
             updatedCalendar.Events.Clear(); // All but events
 
             var calendarEvents = calendar.Events.ToList();
@@ -366,46 +381,49 @@ namespace EchangeDumpedMessagesListener
             return updatedCalendar;
         }
 
-        private static Func<DDay.iCal.IEvent, Event> BuildEventRecurrenceIdFixer(Appointment reccuringAppointment, IEnumerable<DDay.iCal.IEvent> calendarEvents)
+        private static Func<IcalIEvent, IcalEvent> BuildEventRecurrenceIdFixer(Appointment reccuringAppointment, IEnumerable<IcalIEvent> calendarEvents)
         {
             var mapOfModifiedOccurrences = BuildMapOfStartDateToReccurrenceException(calendarEvents, reccuringAppointment.ModifiedOccurrences);
             EventDateMapper originalStartDateMapper = ev => DateTimeOffset.Parse(mapOfModifiedOccurrences[ev.Start].OriginalStart);
-            Func<DDay.iCal.IEvent, Event> fixReccurrenceId = ev => FixEventReccuringId(originalStartDateMapper, ev);
+            Func<IcalIEvent, IcalEvent> fixReccurrenceId = ev => FixEventReccuringId(originalStartDateMapper, ev);
             return fixReccurrenceId;
         }
 
-        private static IDictionary<IDateTime, ModifiedOccurrence> BuildMapOfStartDateToReccurrenceException(
-            IEnumerable<DDay.iCal.IEvent> events, ICollection<ModifiedOccurrence> modifiedOccurrences)
+        private static IDictionary<Ical.Net.Interfaces.DataTypes.IDateTime, ModifiedOccurrence> BuildMapOfStartDateToReccurrenceException(
+            IEnumerable<IcalIEvent> events, ICollection<ModifiedOccurrence> modifiedOccurrences)
         {
             var eventsJoin =
                 from e in events
                 join occ in modifiedOccurrences
-                on e.Start.UTC equals DateTime.Parse(occ.Start).ToUniversalTime()
-                where e.RecurrenceID != null
+                    on e.Start.AsUtc equals DateTime.Parse(occ.Start).ToUniversalTime()
+                where e.RecurrenceId != null
                 select new { Start = e.Start, Exception = occ };
 
             return eventsJoin.ToDictionary(k => k.Start, v => v.Exception);
         }
 
-        private static Event FixEventReccuringId(EventDateMapper originalStartDateProvider, DDay.iCal.IEvent ev)
+        private static IcalEvent FixEventReccuringId(EventDateMapper originalStartDateProvider, IcalIEvent ev)
         {
-            if (ev.RecurrenceID == null && ev is Event)
-                return ev as Event; // reccurence master
+            if (originalStartDateProvider == null)
+                throw new ArgumentNullException(nameof(originalStartDateProvider));
+
+            if (ev.RecurrenceId == null && ev is IcalEvent)
+                return ev as IcalEvent; // reccurence master
             var updatedEvent = ev.Copy<Event>();
             var eventOriginalStartUtcDate = originalStartDateProvider(ev).ToUniversalTime();
-            var originalUtcDateICal = new iCalDateTime(eventOriginalStartUtcDate.DateTime) { IsUniversalTime = true };
-            updatedEvent.RecurrenceID = originalUtcDateICal;
+            var originalUtcDateICal = new CalDateTime(eventOriginalStartUtcDate.DateTime) { IsUniversalTime = true };
+            updatedEvent.RecurrenceId = originalUtcDateICal;
 
             return updatedEvent;
         }
-        private static IICalendar RepeatOrganizerInOccurences(Appointment reccuringAppointment, IICalendar calendar)
+        private static ICalendar RepeatOrganizerInOccurences(Appointment reccuringAppointment, ICalendar calendar)
         {
             if (reccuringAppointment?.ModifiedOccurrences == null)
                 return calendar;
             if (string.IsNullOrWhiteSpace(reccuringAppointment.Organizer?.Address))
                 return calendar;
 
-            var updatedCalendar = calendar.Copy<IICalendar>();
+            var updatedCalendar = calendar.Copy<ICalendar>();
 
             var foundOrganizer = calendar.Events.FirstOrDefault(ev => ev.Organizer != null).Organizer;
 

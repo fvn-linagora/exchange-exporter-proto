@@ -3,11 +3,11 @@ NUGET
     Bender (3.0.54)
       flexo (>= 1.0.24)
     CommandLineParser (2.0.275-beta)
-    DDay.iCal (1.0.2.575)
     EasyNetQ (0.63.0.448)
       RabbitMQ.Client (>= 3.6)
     flexo (1.0.24)
     FSharp.Core (4.0.0.1) - redirects: force
+    Ical.Net (2.2)
     Microsoft.Exchange.WebServices (2.2)
     Microsoft.NETCore.Platforms (1.0.1) - framework: >= netstandard10
     Microsoft.NETCore.Targets (1.0.1) - framework: >= netstandard10
