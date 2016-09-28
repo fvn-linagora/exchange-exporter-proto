@@ -247,4 +247,11 @@ namespace Messages
         public ConversationId ConversationId { get; set; }
         //public bool IsDirty { get; set; }
     }
+
+    public enum AddressBookType
+    {
+        Primary,
+        Collected,
+        Custom
+    }
 }

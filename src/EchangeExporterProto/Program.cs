@@ -37,6 +37,7 @@ namespace EchangeExporterProto
         private static readonly ILog log = new ConsoleLogger();
         private static readonly TractableJsonSerializer serializer = new TractableJsonSerializer();
         private static IAppointmentsProvider appointmentsProvider;
+        private static readonly ISet<string> suggestedContactsFolderName = new SortedSet<string>(new string[] { @"Suggested Contacts", @"Contacts suggérés" });
 
         static void Main(string[] args)
         {
@@ -218,8 +219,8 @@ namespace EchangeExporterProto
                     Console.WriteLine("Dumping Addressbooks for account: {0} ...", box.PrimarySmtpAddress);
                     ImpersonateQueries(service, box.PrimarySmtpAddress);
 
+                    var defaultAddressBook = Folder.Bind(service, WellKnownFolderName.Contacts) as ContactsFolder;
                     var rootFolder = Folder.Bind(service, WellKnownFolderName.MsgFolderRoot);
-
                     var addressBooks = rootFolder.FindFolders(searchFilter, folderView).Cast<ContactsFolder>().ToList();
 
                     var addressBookMessages = addressBooks
@@ -229,6 +230,7 @@ namespace EchangeExporterProto
                             CreationDate = DateTime.UtcNow,
                             PrimaryEmailAddress = box.PrimarySmtpAddress,
                             AddressBookId = book.Id.UniqueId,
+                            AddressBookType = GetAddressBookType(book, defaultAddressBook),
                             DisplayName = book.DisplayName,
                         })
                         .ToList();
@@ -245,6 +247,20 @@ namespace EchangeExporterProto
                     log.Error($"An error occured for mailbox {box.PrimarySmtpAddress}, message: {ex.Message}, stack: {ex.StackTrace}");
                 }
             }
+        }
+
+        private static AddressBookType GetAddressBookType(ContactsFolder book, ContactsFolder defaultAddressBook)
+        {
+            if (defaultAddressBook == null || string.IsNullOrWhiteSpace(defaultAddressBook.Id?.UniqueId))
+                throw new ArgumentNullException(nameof(defaultAddressBook));
+            if (book == null || string.IsNullOrWhiteSpace(book.Id?.UniqueId))
+                throw new ArgumentNullException(nameof(book));
+
+            if (book.Id.UniqueId == defaultAddressBook.Id.UniqueId)
+                return AddressBookType.Primary;
+            if (suggestedContactsFolderName.Contains(book?.DisplayName, StringComparer.InvariantCultureIgnoreCase))
+                return AddressBookType.Collected;
+            return AddressBookType.Custom;
         }
 
         private static IEnumerable<NewMimeContactExported> DumpAddressBookContacts(ExchangeService service, String primaryAddress, IEnumerable<ContactsFolder> addressBooks)

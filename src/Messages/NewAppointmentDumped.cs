@@ -41,6 +41,7 @@
         public string PrimaryEmailAddress { get; set; }
         public string AddressBookId { get; set; }
         public string DisplayName { get; set; }
+        public AddressBookType AddressBookType { get; set; }
     }
 
 
