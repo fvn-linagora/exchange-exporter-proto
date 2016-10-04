@@ -118,7 +118,7 @@ namespace EchangeExporterProto
                 Id = Guid.NewGuid(),
                 CreationDate = DateTime.UtcNow,
                 LastModified = attachment.Appointment.LastModifiedTime,
-                PrimaryEmailAddress = attachment.Mailbox.PrimarySmtpAddress,
+                PrimaryAddress = attachment.Mailbox.PrimarySmtpAddress,
                 CalendarId = attachment.Calendar.Id.UniqueId,
                 AppointmentId = attachment.Appointment.Id.UniqueId,
                 Content = attachment.Attachment.Content
@@ -228,13 +228,13 @@ namespace EchangeExporterProto
                         {
                             Id = Guid.NewGuid(),
                             CreationDate = DateTime.UtcNow,
-                            PrimaryEmailAddress = box.PrimarySmtpAddress,
+                            PrimaryAddress = box.PrimarySmtpAddress,
                             AddressBookId = book.Id.UniqueId,
                             AddressBookType = GetAddressBookType(book, defaultAddressBook),
                             DisplayName = book.DisplayName,
                         })
                         .ToList();
-                    addressBookMessages.ForEach(book => Console.WriteLine("Mailbox: {2}, Book #{0} , DisplayName: {1}", book.Id, book.DisplayName, book.PrimaryEmailAddress));
+                    addressBookMessages.ForEach(book => Console.WriteLine("Mailbox: {2}, Book #{0} , DisplayName: {1}", book.Id, book.DisplayName, book.PrimaryAddress));
                     PublishToBus(addressBookMessages, queueConf);
 
                     if (skippedSteps.Contains(Features.Contact)) continue;
