@@ -8,6 +8,7 @@ using AppointmentType = Microsoft.Exchange.WebServices.Data.AppointmentType;
 using Attendee = Microsoft.Exchange.WebServices.Data.Attendee;
 using EWSAppointment = Microsoft.Exchange.WebServices.Data.Appointment;
 using EWSAppointmentType = Microsoft.Exchange.WebServices.Data.AppointmentType;
+using EWSMailboxType = Microsoft.Exchange.WebServices.Data.MailboxType;
 using Messages;
 using Appointment = Messages.Appointment;
 
@@ -22,6 +23,10 @@ namespace EchangeExporterProto
     {
         private static readonly ICollection<EWSAppointmentType> singleAndRecurringMasterAppointmentTypes =
             new List<EWSAppointmentType> {EWSAppointmentType.RecurringMaster, EWSAppointmentType.Single};
+
+        private static readonly ISet<EWSMailboxType> expandableMailboxTypes = new HashSet<EWSMailboxType> {
+            EWSMailboxType.PublicGroup, EWSMailboxType.PublicFolder, EWSMailboxType.ContactGroup
+        };
 
         private readonly Func<string, ExchangeService> impersonateServiceProvider;
         private readonly TractableJsonSerializer serializer;
@@ -48,6 +53,7 @@ namespace EchangeExporterProto
                 (RepairReccurenceMasterAttendees).Partial(service);
             var fetchAppointmentDetails = new Func<EWSAppointment, EWSAppointment>(
                 app => EWSAppointment.Bind(service, app.Id, includeMostProps));
+            var expandDistributionLists = new Func<ExchangeService, EWSAppointment, EWSAppointment>(ExpandGroups).Partial(service);
 
             var mailboxAppointments = GetAllCalendars(service)
                 .SelectMany(findAllAppointments);
@@ -57,6 +63,7 @@ namespace EchangeExporterProto
 
             var singleAndReccurringMasterAppointmentsWithContext = singleAndReccurringMasterAppointments
                 .Select(fetchAppointmentDetails)
+                .Select(expandDistributionLists)
                 .Select(repairMaster);
 
             return singleAndReccurringMasterAppointmentsWithContext
@@ -106,7 +113,7 @@ namespace EchangeExporterProto
             return result;
         }
 
-        private AppointmentWithParticipation RepairReccurenceMasterAttendees(ExchangeService service, EWSAppointment appointment)
+        private static AppointmentWithParticipation RepairReccurenceMasterAttendees(ExchangeService service, EWSAppointment appointment)
         {
             if (appointment.AppointmentType != AppointmentType.RecurringMaster)
                 return new AppointmentWithParticipation(appointment);
@@ -134,6 +141,45 @@ namespace EchangeExporterProto
                     .ToDictionary(k => k.ItemId, v => v.ExceptionsAttendees),
             };
         }
+
+        private static EWSAppointment ExpandGroups(ExchangeService service, EWSAppointment appointment)
+        {
+            var expandDL = new Func<ExchangeService, string, IEnumerable<Attendee>> (ExpandDistributionLists).Partial(service);
+
+            // Expand DL in attendees collections
+            appointment.RequiredAttendees
+                .Where(HasExpandableMailbox)
+                .Select(x => x.Address)
+                .SelectMany(expandDL)
+                .ToList()
+                .ForEach(appointment.RequiredAttendees.Add);
+            appointment.OptionalAttendees
+                .Where(HasExpandableMailbox)
+                .Select(x => x.Address)
+                .SelectMany(expandDL)
+                .ToList()
+                .ForEach(appointment.OptionalAttendees.Add);
+            appointment.Resources
+                .Where(HasExpandableMailbox)
+                .Select(x => x.Address)
+                .SelectMany(expandDL)
+                .ToList()
+                .ForEach(appointment.Resources.Add);
+
+            // Return updated apppointment
+            return appointment;
+        }
+
+        private static IEnumerable<Attendee> ExpandDistributionLists(ExchangeService service, string mailbox)
+        {
+            foreach (EmailAddress address in service.ExpandGroup(mailbox).Members)
+                if (address.MailboxType == EWSMailboxType.PublicGroup)
+                    ExpandDistributionLists(service, address.Address);
+                else
+                    yield return new Attendee(address);
+        }
+
+        private static bool HasExpandableMailbox(Attendee attendee) => attendee.MailboxType.HasValue && expandableMailboxTypes.Contains(attendee.MailboxType.Value);
 
         private static IEnumerable<EWSAppointment> FindAllAppointments(ExchangeService service, FolderId calendarId)
         {
