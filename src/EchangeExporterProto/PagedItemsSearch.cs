@@ -41,7 +41,7 @@
                         // the last result (anchor) from the previous page.
                         // If it doesn't, that means that something was added
                         // or deleted since you started the search.
-                        if (results.Items.First<Item>().Id.ToString() != anchorId.ToString())
+                        if (results.Items.FirstOrDefault<Item>()?.Id?.ToString() != anchorId.ToString())
                         {
                             Console.WriteLine("The collection has changed while paging. Some results may be missed.");
                         }
@@ -52,7 +52,7 @@
 
                     // anchorId = results.Items.Last<Item>().Id;
                     res = results.Items.Cast<T>();
-                    anchorId = res.Last().Id;
+                    anchorId = res.LastOrDefault()?.Id;
                 }
                 catch (Exception ex)
                 {

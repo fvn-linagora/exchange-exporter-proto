@@ -1,2 +1,4 @@
 DDay.iCal
-EasyNetQ.Rx
+EasyNetQ
+CommandLineParser
+SimpleConfig

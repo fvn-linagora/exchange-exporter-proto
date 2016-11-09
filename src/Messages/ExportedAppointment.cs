@@ -1,27 +1,65 @@
-﻿using System;
+﻿using System.Linq;
 using System.Collections.Generic;
+using System.Text;
 
 namespace Messages
 {
-    public class Attendee
+    public abstract class Attendee
     {
         public string Name { get; set; }
         public string Address { get; set; }
         public string RoutingType { get; set; }
-        public int? MailboxType { get; set; }
+        public MailboxType? MailboxType { get; set; }
+    }
+    public enum MeetingResponseType
+    {
+        Unknown,
+        Organizer,
+        Tentative,
+        Accept,
+        Decline,
+        NoResponseReceived
+    }
+    public enum MailboxType
+    {
+        Unknown,
+        OneOff,
+        Mailbox,
+        PublicFolder,
+        PublicGroup,
+        ContactGroup,
+        Contact
     }
 
     public class Organizer : Attendee {}
 
-    public class RequiredAttendee : Attendee
+    public abstract class InvitedAttendee : Attendee
     {
-        public int? ResponseType { get; set; }
+        public MeetingResponseType? ResponseType { get; set; }
     }
 
-    public class OptionalAttendee : Attendee
+    public class RequiredAttendee : InvitedAttendee { }
+
+    public class OptionalAttendee : InvitedAttendee { }
+
+    public class Resource : InvitedAttendee { }
+
+    public class ExceptionAttendees
     {
-        public int? ResponseType { get; set; }
+        public ISet<OptionalAttendee> Optional { get; set; }
+        public ISet<RequiredAttendee> Required { get; set; }
+        public ISet<Resource> Resources { get; set; }
+
+        public IEnumerable<InvitedAttendee> All {
+            get {
+                return
+                    Optional.Cast<InvitedAttendee>()
+                    .Union(Required.Cast<InvitedAttendee>())
+                    .Union(Resources.Cast<InvitedAttendee>());
+            }
+        }
     }
+
 
     public class Recurrence
     {
@@ -35,14 +73,14 @@ namespace Messages
 
     public struct ItemId
     {
-        public string uniqueId { get; set; }
-        public string changeKey { get; set; }
+        public string UniqueId { get; set; }
+        public string ChangeKey { get; set; }
     }
 
     public class ModifiedOccurrence
     {
         public ItemId ItemId { get; set; }
-        public List<Attendee> Attendees { get; set; }
+        public ExceptionAttendees Attendees { get; set; }
         public string Start { get; set; }
         public string End { get; set; }
         public string OriginalStart { get; set; }
@@ -100,8 +138,8 @@ namespace Messages
 
     public class Id
     {
-        public string uniqueId { get; set; }
-        public string changeKey { get; set; }
+        public string UniqueId { get; set; }
+        public string ChangeKey { get; set; }
     }
 
     public class Body
@@ -123,6 +161,12 @@ namespace Messages
         RecurringMaster
     }
 
+    public class MimeContent
+    {
+        public string CharacterSet { get; set; }
+        public byte[] Content { get; set; }
+    }
+
     public class Appointment
     {
         public string Start { get; set; }
@@ -137,8 +181,8 @@ namespace Messages
         public int MyResponseType { get; set; }
         public Organizer Organizer { get; set; }
         public List<RequiredAttendee> RequiredAttendees { get; set; }
-        public List<OptionalAttendee > OptionalAttendees { get; set; }
-        // public List<object> Resources { get; set; }
+        public List<OptionalAttendee> OptionalAttendees { get; set; }
+        public List<Resource> Resources { get; set; }
         public string Duration { get; set; }
         public string TimeZone { get; set; }
         public int AppointmentSequenceNumber { get; set; }
@@ -153,7 +197,20 @@ namespace Messages
         public bool AllowNewTimeProposal { get; set; }
         public string ICalUid { get; set; }
         public string ICalDateTimeStamp { get; set; }
-        public bool IsAttachment { get; set; }
+
+        public string AsICal
+        {
+            get
+            {
+                return Encoding.GetEncoding(MimeContent?.CharacterSet ?? Encoding.ASCII.ToString())
+                    .GetString(MimeContent?.Content);
+            }
+        }
+        public MimeContent MimeContent { get; set; }
+
+        public IDictionary<Id, ExceptionAttendees> AttendeeStatus { get; set; }
+
+        bool IsAttachment { get; set; }
         public bool IsNew { get; set; }
         public Id Id { get; set; }
         public Id ParentFolderId { get; set; }
@@ -179,15 +236,22 @@ namespace Messages
         public string DisplayTo { get; set; }
         public bool HasAttachments { get; set; }
         public Body Body { get; set; }
-        public string ItemClass { get; set; }
+        //public string ItemClass { get; set; }
         public string Subject { get; set; }
-        public string WebClientReadFormQueryString { get; set; }
-        public string WebClientEditFormQueryString { get; set; }
+        //public string WebClientReadFormQueryString { get; set; }
+        //public string WebClientEditFormQueryString { get; set; }
         // public List<object> ExtendedProperties { get; set; }
-        public int EffectiveRights { get; set; }
+        //public int EffectiveRights { get; set; }
         public string LastModifiedName { get; set; }
         public string LastModifiedTime { get; set; }
         public ConversationId ConversationId { get; set; }
-        public bool IsDirty { get; set; }
+        //public bool IsDirty { get; set; }
+    }
+
+    public enum AddressBookType
+    {
+        Primary,
+        Collected,
+        Custom
     }
 }
