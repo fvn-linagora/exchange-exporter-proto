@@ -2,7 +2,6 @@ source https://nuget.org/api/v2
 
   nuget CommandLineParser 2.0.275-beta beta
   nuget FSharp.Core redirects: force
-  nuget Ical.Net 2.2
   nuget EasyNetQ ~> 0
   nuget RabbitMQ.Client ~> 3
   nuget Microsoft.Exchange.WebServices 2.2
@@ -11,6 +10,10 @@ source https://nuget.org/api/v2
   nuget TinyCsvParser 1.2
   nuget System.Reactive.Core 3.0.0
   nuget NUnit ~> 2
+
+source https://www.myget.org/F/ical-net-mono-ci/api/v3/index.json
+
+  nuget Ical.Net 2.2
 
 group Build
   source https://nuget.org/api/v2
