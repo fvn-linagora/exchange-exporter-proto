@@ -61,8 +61,7 @@ namespace EchangeExporterProto
 
             var queueConf = CompleteQueueConfigWithDefaults();
 
-            if (string.IsNullOrWhiteSpace(config.Credentials.Domain)
-                || string.IsNullOrWhiteSpace(config.Credentials.Login)
+            if (string.IsNullOrWhiteSpace(config.Credentials.Login)
                 || string.IsNullOrWhiteSpace(config.Credentials.Password))
             {
                 Error("Provided credentials are incomplete!");
@@ -362,10 +361,17 @@ namespace EchangeExporterProto
                         MimeContent = app.AsICal
                     });
 
-                    foreach (var ev in foundEvents)
+                    try
                     {
-                        Console.WriteLine("Extracted with event #{0}. About to publish to {1}...", ev.Id, config.MessageQueue.Host);
-                        bus.Publish(ev);
+                        foreach (var ev in foundEvents)
+                        {
+                            Console.WriteLine("Extracted with event #{0}. About to publish to {1}...", ev.Id, config.MessageQueue.Host);
+                            bus.Publish(ev);
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        log.Error(e.ToString());
                     }
                 }
             }
@@ -395,7 +401,10 @@ namespace EchangeExporterProto
             // Ignoring invalid exchange server provided certificate, on purpose, Yay !
             ServicePointManager.ServerCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
 
-            service.Credentials = new NetworkCredential(credentials.Login, credentials.Password, credentials.Domain);
+            service.Credentials = String.IsNullOrWhiteSpace(credentials.Domain)
+                ? new NetworkCredential(credentials.Login, credentials.Password)
+                : new NetworkCredential(credentials.Login, credentials.Password, credentials.Domain);
+
             string exchangeEndpoint = string.Format(exchange.EndpointTemplate, exchange.Host);
             service.Url = new Uri(exchangeEndpoint);
             return service;

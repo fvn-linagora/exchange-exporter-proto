@@ -52,7 +52,7 @@ namespace EchangeExporterProto
             var repairMaster = new Func<ExchangeService, EWSAppointment, AppointmentWithParticipation>
                 (RepairReccurenceMasterAttendees).Partial(service);
             var fetchAppointmentDetails = new Func<EWSAppointment, EWSAppointment>(
-                app => EWSAppointment.Bind(service, app.Id, includeMostProps));
+                app => FetchAppointmentDetails(app, includeMostProps, service));
             var expandDistributionLists = new Func<ExchangeService, EWSAppointment, EWSAppointment>(ExpandGroups).Partial(service);
 
             var mailboxAppointments = GetAllCalendars(service)
@@ -67,7 +67,20 @@ namespace EchangeExporterProto
                 .Select(repairMaster);
 
             return singleAndReccurringMasterAppointmentsWithContext
+                .Where(awp => awp != default(AppointmentWithParticipation))
                 .Select(ToAppointmentDTO);
+        }
+
+        private static EWSAppointment FetchAppointmentDetails(EWSAppointment app, PropertySet includeMostProps, ExchangeService service)
+        {
+            try
+            {
+                return EWSAppointment.Bind(service, app.Id, includeMostProps);
+            }
+            catch (ServiceResponseException ex) when (ex.ErrorCode == ServiceError.ErrorRecurrenceHasNoOccurrence)
+            {
+                return default(EWSAppointment);
+            }
         }
 
         private Appointment ToAppointmentDTO(AppointmentWithParticipation appointment)
@@ -115,6 +128,9 @@ namespace EchangeExporterProto
 
         private static AppointmentWithParticipation RepairReccurenceMasterAttendees(ExchangeService service, EWSAppointment appointment)
         {
+            if (appointment == default(EWSAppointment))
+                return default(AppointmentWithParticipation); // avoid breaking iterator
+
             if (appointment.AppointmentType != AppointmentType.RecurringMaster)
                 return new AppointmentWithParticipation(appointment);
             if (appointment.ModifiedOccurrences == null)
@@ -144,6 +160,9 @@ namespace EchangeExporterProto
 
         private static EWSAppointment ExpandGroups(ExchangeService service, EWSAppointment appointment)
         {
+            if (appointment == default(EWSAppointment))
+                return default(EWSAppointment); // avoid breaking iterator
+
             var expandDL = new Func<ExchangeService, string, IEnumerable<Attendee>> (ExpandDistributionLists).Partial(service);
 
             // Expand DL in attendees collections
