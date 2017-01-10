@@ -397,7 +397,7 @@ namespace EchangeExporterProto
         }
 
         private static ExchangeService ConnectToExchange(ExchangeServer exchange, Credentials credentials) {
-            ExchangeService service = new ExchangeService(ExchangeVersion.Exchange2010_SP2);
+            ExchangeService service = new ExchangeService(ToExchangeVersionOrDefault(exchange));
             // Ignoring invalid exchange server provided certificate, on purpose, Yay !
             ServicePointManager.ServerCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
 
@@ -408,6 +408,12 @@ namespace EchangeExporterProto
             string exchangeEndpoint = string.Format(exchange.EndpointTemplate, exchange.Host);
             service.Url = new Uri(exchangeEndpoint);
             return service;
+        }
+
+        private static ExchangeVersion ToExchangeVersionOrDefault(ExchangeServer exchange)
+        {
+            string exchangeVersionString = Enum.Format(typeof(ExchangeServerVersion), exchange.ExchangeVersion, "G");
+            return Enum.IsDefined(typeof(ExchangeVersion), exchangeVersionString) ? (ExchangeVersion)Enum.Parse(typeof(ExchangeVersion), exchangeVersionString) : ExchangeVersion.Exchange2010_SP1;
         }
 
         private static void Error(string message)
