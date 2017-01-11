@@ -348,9 +348,18 @@ namespace EchangeExporterProto
                     if (string.IsNullOrWhiteSpace(mailbox.PrimarySmtpAddress)) continue;
                     Console.WriteLine("Dumping calendar items for account: {0} ...", mailbox.PrimarySmtpAddress);
 
-                    // NOTE: as exchangeservice instance is shared & mutated, provider is inherently NOT thread-safe !
-                    var appointments = appointmentsProvider.FindByMailbox(mailbox.PrimarySmtpAddress);
-
+                    IEnumerable<Messages.Appointment> appointments;
+                    try
+                    {
+                        // NOTE: as exchangeservice instance is shared & mutated, provider is inherently NOT thread-safe !
+                        appointments = appointmentsProvider.FindByMailbox(mailbox.PrimarySmtpAddress);
+                    }
+                    catch (ServiceResponseException e) when (e.ErrorCode == ServiceError.ErrorNonExistentMailbox)
+                    {
+                        log.Error($"mailbox: account '{mailbox}' cannot be found on server");
+                        log.Error(e.ToString());
+                        continue;
+                    }
                     var foundEvents = appointments.Select(app => new NewAppointmentDumped
                     {
                         Mailbox = mailbox.PrimarySmtpAddress,
@@ -369,7 +378,12 @@ namespace EchangeExporterProto
                             bus.Publish(ev);
                         }
                     }
-                    catch (Exception e)
+                    catch (TimeoutException e) when (e.Source == "EasyNetQ")
+                    {
+                        log.Error($"Could not join configured message queue '{config.MessageQueue.Host ?? ""}'. Quitting.");
+                        throw;
+                    }
+                    catch (ServiceResponseException e)
                     {
                         log.Error(e.ToString());
                     }
