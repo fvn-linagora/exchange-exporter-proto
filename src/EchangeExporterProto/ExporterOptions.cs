@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using CommandLine;
 
 namespace EchangeExporterProto
@@ -15,6 +16,9 @@ namespace EchangeExporterProto
 
         [Option('s', "skip-steps", HelpText = "Steps to be skipped (events, addressbooks, attachments, contacts).")]
         public IEnumerable<Features> SkippedSteps { get; set; }
+
+        [Option("since", HelpText = "Last modified date.")]
+        public DateTime? Since { get; set; }
 
         [Option(
              HelpText = "Prints all messages to standard output.")]

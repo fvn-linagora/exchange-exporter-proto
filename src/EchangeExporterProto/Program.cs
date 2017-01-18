@@ -76,7 +76,7 @@ namespace EchangeExporterProto
             appointmentsProvider = new ExchangeAppointmentsProvider(serializer, pa => ImpersonateQueries(service, pa));
 
             if (!skippedSteps.Contains(Features.Event))
-                ExportAndPublishAppointments(queueConf, service, mailboxes);
+                ExportAndPublishAppointments(queueConf, service, mailboxes, arguments.Since);
             if (!(skippedSteps.Contains(Features.AddressBook) && skippedSteps.Contains(Features.Contact)))
                 ExportAndPublishAddressBooks(queueConf, service, mailboxes);
 
@@ -338,7 +338,7 @@ namespace EchangeExporterProto
             };
         }
 
-        private static void ExportAndPublishAppointments(MessageQueue queueConf, ExchangeService service, IEnumerable<MailAccount> mailboxes)
+        private static void ExportAndPublishAppointments(MessageQueue queueConf, ExchangeService service, IEnumerable<MailAccount> mailboxes, DateTime? sinceDate = null)
         {
             using (var bus = RabbitHutch.CreateBus(queueConf.ConnectionString , serviceRegister => serviceRegister.Register<ISerializer>(
                     serviceProvider => new NullHandingJsonSerializer(new TypeNameSerializer()))))
@@ -352,7 +352,7 @@ namespace EchangeExporterProto
                     try
                     {
                         // NOTE: as exchangeservice instance is shared & mutated, provider is inherently NOT thread-safe !
-                        appointments = appointmentsProvider.FindByMailbox(mailbox.PrimarySmtpAddress);
+                        appointments = appointmentsProvider.FindByMailbox(mailbox.PrimarySmtpAddress, sinceDate);
                     }
                     catch (ServiceResponseException e) when (e.ErrorCode == ServiceError.ErrorNonExistentMailbox)
                     {

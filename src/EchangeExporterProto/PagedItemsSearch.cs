@@ -8,7 +8,7 @@
 
     static class PagedItemsSearch
     {
-        internal static IEnumerable<T> PageSearchItems<T>(ExchangeService service, FolderId folderId, int pageSize, PropertySet properties, PropertyDefinition sortBy) where T: Item
+        internal static IEnumerable<T> PageSearchItems<T>(ExchangeService service, FolderId folderId, int pageSize, PropertySet properties, PropertyDefinition sortBy, SearchFilter.SearchFilterCollection searchFilter) where T : Item
         {
             // int pageSize = 5;
             int offset = 0;
@@ -16,13 +16,12 @@
             // Request one more item than your actual pageSize.
             // This will be used to detect a change to the result
             // set while paging.
-            ItemView view = new ItemView(pageSize + 1, offset);
-
-            // view.PropertySet = new PropertySet(ItemSchema.Subject);
-            view.PropertySet = properties;
-            // view.OrderBy.Add(ItemSchema.DateTimeReceived, SortDirection.Descending);
+            var view = new ItemView(pageSize + 1, offset)
+            {
+                PropertySet = properties,
+                Traversal = ItemTraversal.Shallow
+            };
             view.OrderBy.Add(sortBy, SortDirection.Descending);
-            view.Traversal = ItemTraversal.Shallow;
 
             IEnumerable<T> res = new List<T>();
 
@@ -32,7 +31,9 @@
             {
                 try
                 {
-                    FindItemsResults<Item> results = service.FindItems(folderId, view);
+                    FindItemsResults<Item> results = searchFilter == null
+                        ? service.FindItems(folderId, view)
+                        : service.FindItems(folderId, searchFilter, view);
                     moreItems = results.MoreAvailable;
 
                     if (moreItems && anchorId != null)
@@ -50,7 +51,6 @@
                     if (moreItems)
                         view.Offset += pageSize;
 
-                    // anchorId = results.Items.Last<Item>().Id;
                     res = results.Items.Cast<T>();
                     anchorId = res.LastOrDefault()?.Id;
                 }

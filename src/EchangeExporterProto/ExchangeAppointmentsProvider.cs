@@ -17,6 +17,7 @@ namespace EchangeExporterProto
     public interface IAppointmentsProvider
     {
         IEnumerable<Appointment> FindByMailbox(string primaryEmailAddress);
+        IEnumerable<Appointment> FindByMailbox(string primaryEmailAddress, DateTime? sinceDate);
     }
 
     public class ExchangeAppointmentsProvider : IAppointmentsProvider
@@ -36,19 +37,23 @@ namespace EchangeExporterProto
             this.serializer = serializer;
             this.impersonateServiceProvider = impersonateServiceProvider;
         }
-
         public IEnumerable<Appointment> FindByMailbox(string primaryEmailAddress)
         {
-            return FindAllMeetingsForMailbox(primaryEmailAddress);
+            return FindByMailbox(primaryEmailAddress, null);
         }
 
-        private IEnumerable<Appointment> FindAllMeetingsForMailbox(string primaryEmailAddress)
+        public IEnumerable<Appointment> FindByMailbox(string primaryEmailAddress, DateTime? sinceDate)
+        {
+            return FindAllMeetingsForMailbox(primaryEmailAddress, sinceDate);
+        }
+
+        private IEnumerable<Appointment> FindAllMeetingsForMailbox(string primaryEmailAddress, DateTime? sinceDate)
         {
             PropertySet includeMostProps = BuildAppointmentPropertySet();
             ExchangeService service = impersonateServiceProvider(primaryEmailAddress);
 
             var findAllAppointments = new Func<CalendarFolder, IEnumerable<EWSAppointment>>
-                (calendar => FindAllAppointments(service, calendar.Id));
+                (calendar => FindAllAppointments(service, calendar.Id, sinceDate));
             var repairMaster = new Func<ExchangeService, EWSAppointment, AppointmentWithParticipation>
                 (RepairReccurenceMasterAttendees).Partial(service);
             var fetchAppointmentDetails = new Func<EWSAppointment, EWSAppointment>(
@@ -200,17 +205,27 @@ namespace EchangeExporterProto
 
         private static bool HasExpandableMailbox(Attendee attendee) => attendee.MailboxType.HasValue && expandableMailboxTypes.Contains(attendee.MailboxType.Value);
 
-        private static IEnumerable<EWSAppointment> FindAllAppointments(ExchangeService service, FolderId calendarId)
+
+        private static IEnumerable<EWSAppointment> FindAllAppointments(ExchangeService service, FolderId calendarId, DateTime? sinceDate)
         {
             var appIdsView = new ItemView(int.MaxValue)
             {
-                PropertySet = new PropertySet(BasePropertySet.IdOnly, AppointmentSchema.AppointmentType)
+                PropertySet = new PropertySet(BasePropertySet.IdOnly, AppointmentSchema.AppointmentType, ItemSchema.LastModifiedTime)
             };
 
+            var filter = sinceDate.HasValue ? BuildModifiedSinceFilter(sinceDate.Value) : null;
+
             var result = PagedItemsSearch.PageSearchItems<Microsoft.Exchange.WebServices.Data.Appointment>(service, calendarId, 500,
-                appIdsView.PropertySet, AppointmentSchema.DateTimeCreated);
+                appIdsView.PropertySet, AppointmentSchema.DateTimeCreated, filter);
 
             return result;
+        }
+        private static SearchFilter.SearchFilterCollection BuildModifiedSinceFilter(DateTime sinceDate)
+        {
+            var searchFilter = new SearchFilter.SearchFilterCollection(LogicalOperator.And);
+            searchFilter.Add(new SearchFilter.IsGreaterThanOrEqualTo(ItemSchema.LastModifiedTime, sinceDate));
+            searchFilter.Add(new SearchFilter.IsEqualTo(ItemSchema.ItemClass, "IPM.Appointment"));
+            return searchFilter;
         }
 
         public static IEnumerable<CalendarFolder> GetAllCalendars(ExchangeService service)
