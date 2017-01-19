@@ -14,7 +14,7 @@ namespace EchangeExporterProto
              HelpText = "Configuration file path.")]
         public string ConfigPath { get; set; }
 
-        [Option('s', "skip-steps", HelpText = "Steps to be skipped (events, addressbooks, attachments, contacts).")]
+        [Option('s', "skip-steps", Separator = ',', HelpText = "Steps to be skipped (events, addressbooks, attachments, contacts).")]
         public IEnumerable<Features> SkippedSteps { get; set; }
 
         [Option("since", HelpText = "Last modified date.")]
