@@ -196,11 +196,14 @@ namespace EchangeExporterProto
 
         private static IEnumerable<Attendee> ExpandDistributionLists(ExchangeService service, string mailbox)
         {
-            foreach (EmailAddress address in service.ExpandGroup(mailbox).Members)
-                if (address.MailboxType == EWSMailboxType.PublicGroup)
-                    ExpandDistributionLists(service, address.Address);
-                else
-                    yield return new Attendee(address);
+            if (mailbox != null)
+            {
+                foreach (EmailAddress address in service.ExpandGroup(mailbox).Members)
+                    if (address.MailboxType == EWSMailboxType.PublicGroup && !String.IsNullOrWhiteSpace(address.Address))
+                        ExpandDistributionLists(service, address.Address);
+                    else if (address != null && !String.IsNullOrWhiteSpace(address.Address))
+                        yield return new Attendee(address);
+            }
         }
 
         private static bool HasExpandableMailbox(Attendee attendee) => attendee.MailboxType.HasValue && expandableMailboxTypes.Contains(attendee.MailboxType.Value);
